@@ -3,10 +3,13 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 import re
-from collections import deque, defaultdict
+from collections import deque
 import sqlite3
 import pickle
 from simhash import Simhash
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 
 def save_state(frontier, visited):
 	"""Save the state of the crawler to disk."""
@@ -28,7 +31,8 @@ def init_db():
 	cursor.execute('''
 		CREATE TABLE IF NOT EXISTS pages (
 			url TEXT PRIMARY KEY,
-			content TEXT
+			content TEXT,
+			relevant INTEGER
 		)
 	''')
 	conn.commit()
@@ -69,12 +73,14 @@ def can_fetch(url):
 
 	return rp.can_fetch("*", url)
 
-def index_with_db(html_content, url):
+def index_with_db(html_content, url, relevant):
 	"""Store all data from HTML in a SQLite database, including HTML tags."""
+	soup = BeautifulSoup(html_content, 'html.parser')
+	pure_text = ' '.join(soup.stripped_strings).replace('\n', ' ')
 	
 	conn = sqlite3.connect('web_crawler.db')
 	cursor = conn.cursor()
-	cursor.execute('INSERT OR IGNORE INTO pages (url, content) VALUES (?, ?)', (url, html_content))
+	cursor.execute('INSERT OR IGNORE INTO pages (url, content, relevant) VALUES (?, ?, ?)', (url, pure_text, relevant))
 	conn.commit()
 	conn.close()
 
@@ -106,8 +112,8 @@ def priority(url):
 	else:
 		return 4  # Low priority
 	
-# improved Crawling
-def improved_crawl(start_urls, stop_value):
+# Single-threaded Crawling
+def single_crawl(start_urls, stop_value):
 	frontier, visited = load_state()
 	crawled = len(visited)
 
@@ -115,10 +121,11 @@ def improved_crawl(start_urls, stop_value):
 		frontier = deque(start_urls)		
 	
 	while frontier and crawled < stop_value:
-		current_url = frontier.popleft()
-		print(f"Crawling {current_url}")
-
 		try:
+			frontier = deque(sorted(frontier, key=priority))
+			current_url = frontier.popleft()
+			print(f"Crawling Nr {crawled}: {current_url}")
+
 			if current_url in visited or not can_fetch(current_url):
 				continue
 
@@ -126,40 +133,106 @@ def improved_crawl(start_urls, stop_value):
 
 			if fetched_url:
 				visited.add(fetched_url)
-			
-				index_with_db(html_content, fetched_url)
+
+				english = is_english(html_content)
+				index_with_db(html_content, fetched_url, english)
 				
 				links = parse_links(html_content, fetched_url)
 				for link in links:
 					if link not in visited and link not in frontier:
 						frontier.append(link)
 				
-				frontier = deque(sorted(frontier, key=priority))
 				save_state(frontier, visited)
 				crawled += 1
 
 		except Exception:
 			print(f"Could not crawl website: {current_url}")
 
-def get_language_relevant(rows):
-	language_relevant = []
+# Multi-threaded crawling
+frontier_lock = threading.Lock()
+visited_lock = threading.Lock()
+crawled_lock = threading.Lock()
+crawled = 0
+frontier = []
+visited = []
 
-	for url, text in rows:
-		if is_english(text):
-			language_relevant.append((url, text))
+def paralel_crawl(start_urls, stop_value, num_threads):
+	global crawled
+	global frontier
+	global visited
+	threads = []
+	frontier, visited = load_state()
+	crawled = len(visited)
 
-	return language_relevant
+	if not frontier:
+		frontier = deque(start_urls)
 
-def calc_symhash(pages):
-	hashes = []
-	
-	for url, text in pages:
-		symhash = Simhash(text).value
-		hashes.append((url, str(symhash)))
-	
-	return hashes
+	for i in range(num_threads):
+		thread = threading.Thread(target=crawl, args=(stop_value,))
+		threads.append(thread)
+		thread.start()
+		
+	# Wait for all threads to complete
+	for thread in threads:
+		thread.join()
 
-# Helper to calculate Hamming distance
+def crawl(stop_value):
+	global crawled
+	global frontier
+	global visited
+	while True:
+		with crawled_lock:
+			with frontier_lock:
+				if not frontier or crawled >= stop_value:
+					break
+				# Safe access to frontier and crawled
+				frontier = deque(sorted(frontier, key=priority))
+				current_url = frontier.popleft()
+				crawled += 1  # Increment crawled count
+
+		try:
+			print(f"Crawling Nr {crawled}: {current_url}")
+
+			with visited_lock:
+				if current_url in visited or not can_fetch(current_url):
+					continue
+				visited.add(current_url)
+
+			html_content, fetched_url = fetch_page(current_url)
+
+			if fetched_url:
+				english = is_english(html_content)
+				index_with_db(html_content, fetched_url, english)
+				
+				links = parse_links(html_content, fetched_url)
+				for link in links:
+					with visited_lock:
+						if link not in visited and link not in frontier:
+							frontier.append(link)
+			
+		except Exception as e:
+			print(f"Could not crawl website: {current_url}. Error: {str(e)}")
+		
+		finally:
+			# Save state after each crawl attempt
+			with visited_lock:
+				with frontier_lock:
+					save_state(frontier, visited)
+
+# process crawled data
+def is_language_relevant(page):
+	url, text, english = page
+	try:
+		if english:
+			return (url, text)
+	except Exception:
+		print(f"could not check {url}")
+
+def calc_symhash(page):
+	url, text = page
+	symhash = Simhash(text).value
+	return (url, str(symhash))	
+
 def hamming_distance(x, y):
 	return bin(x ^ y).count('1')
 
@@ -198,16 +271,27 @@ def establish_workingDB():
 	# load all pages from the database of the crawler
 	conn1 = sqlite3.connect('web_crawler.db')
 	cur1 = conn1.cursor()
-	cur1.execute('SELECT url, content FROM pages')
+	cur1.execute('SELECT url, content, relevant FROM pages')
 	rows = cur1.fetchall()
 	conn1.close()
 
+	print(f"number of entries before processing: {len(rows)}")
+	
 	# process the data
-	language_relevant = get_language_relevant(rows)
-	hashes = calc_symhash(language_relevant)
-	duplicates = detect_duplicates(hashes, 0.9)
+	language_relevant = []
+	with ThreadPoolExecutor() as executor:
+		language_relevant = list(executor.map(is_language_relevant, rows))
+
+	language_relevant = [item for item in language_relevant if item is not None]
+
+	hashes = []
+	with ThreadPoolExecutor() as executor:
+		hashes = list(executor.map(calc_symhash, language_relevant))
+
+	duplicates = detect_duplicates(hashes, 0.98)
 	relevant_pages = remove_duplicates(duplicates, language_relevant)
 
+	print(f"number of entries after processing: {len(relevant_pages)}")
 	#create database to search on
 	conn = sqlite3.connect('search.db')
 	cursor = conn.cursor()
@@ -219,9 +303,7 @@ def establish_workingDB():
 	''')
 	conn.commit()
 
-	for url, html_content in relevant_pages:
-		soup = BeautifulSoup(html_content, 'html.parser')
-		text = ' '.join(soup.stripped_strings).replace('\n', ' ')
+	for url, text in relevant_pages:
 		cursor.execute('INSERT OR IGNORE INTO pages (url, content) VALUES (?, ?)', (url, text))
 		conn.commit()
 	
@@ -245,8 +327,23 @@ if __name__ == "__main__":
 		"https://www.germany.travel/en/cities-culture/tuebingen.html",
 		"https://www.tuebingen-info.de/international-visitors.html",
 		"https://en.wikipedia.org/wiki/T%C3%BCbingen",
-		"https://www.mygermanyvacation.com/best-things-to-do-and-see-in-tubingen-germany/"
+		"https://www.mygermanyvacation.com/best-things-to-do-and-see-in-tubingen-germany/",
+		"https://uni-tuebingen.de/en/"
 	]
-	improved_crawl(start_urls, 50)
+	"""
+	startTimeCrawl = time.time()
+	#single_crawl(start_urls, 400)
+	paralel_crawl(start_urls, 400, 6)
+	endTimeCrawl = time.time()
+	print(f"Total Time to crawl: {endTimeCrawl- startTimeCrawl}")
+
+	"""
+	startTimeProcess = time.time()
 	establish_workingDB()
-	data = load_workdata()
+	endTimeProcess = time.time()
+	print(f"Total Time to process: {endTimeProcess- startTimeProcess}")
+
+	# load data to work with
+	#data = load_workdata()
+
+	
