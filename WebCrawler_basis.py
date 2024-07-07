@@ -76,7 +76,7 @@ def crawl(start_urls):
 
     count = 0
 
-    while frontier:
+    while frontier and count <= 20:
         url = frontier.pop(0)
         if url in visited or not can_fetch(url):
             continue
