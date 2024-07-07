@@ -330,14 +330,12 @@ if __name__ == "__main__":
 		"https://www.mygermanyvacation.com/best-things-to-do-and-see-in-tubingen-germany/",
 		"https://uni-tuebingen.de/en/"
 	]
-	"""
 	startTimeCrawl = time.time()
 	#single_crawl(start_urls, 400)
 	paralel_crawl(start_urls, 400, 6)
 	endTimeCrawl = time.time()
 	print(f"Total Time to crawl: {endTimeCrawl- startTimeCrawl}")
 
-	"""
 	startTimeProcess = time.time()
 	establish_workingDB()
 	endTimeProcess = time.time()
