@@ -332,7 +332,7 @@ if __name__ == "__main__":
 	]
 	startTimeCrawl = time.time()
 	#single_crawl(start_urls, 400)
-	paralel_crawl(start_urls, 400, 6)
+	paralel_crawl(start_urls, 12100, 6)
 	endTimeCrawl = time.time()
 	print(f"Total Time to crawl: {endTimeCrawl- startTimeCrawl}")
 
@@ -343,5 +343,3 @@ if __name__ == "__main__":
 
 	# load data to work with
 	#data = load_workdata()
-
-	
