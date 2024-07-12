@@ -2,9 +2,65 @@ import math
 import sqlite3
 import spacy
 from collections import defaultdict
-
+import os
 
 nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+
+def create_schema(db_name='index_with_position.db'):
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+
+    # Create tables
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Lemmas (
+            id INTEGER PRIMARY KEY,
+            lemma TEXT UNIQUE
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Documents (
+            id INTEGER PRIMARY KEY,
+            doc_id INTEGER,
+            bm25 REAL
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Positions (
+            id INTEGER PRIMARY KEY,
+            doc_id INTEGER,
+            lemma_id INTEGER,
+            position INTEGER,
+            FOREIGN KEY(doc_id) REFERENCES Documents(id),
+            FOREIGN KEY(lemma_id) REFERENCES Lemmas(id)
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+def check_schema(db_name='inverted_index.db'):
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT name FROM sqlite_master WHERE type='table' AND name='Lemmas';
+    ''')
+    has_lemmas = cursor.fetchone() is not None
+
+    cursor.execute('''
+        SELECT name FROM sqlite_master WHERE type='table' AND name='Documents';
+    ''')
+    has_documents = cursor.fetchone() is not None
+
+    cursor.execute('''
+        SELECT name FROM sqlite_master WHERE type='table' AND name='Positions';
+    ''')
+    has_positions = cursor.fetchone() is not None
+
+    conn.close()
+    return has_lemmas and has_documents and has_positions
 
 def get_corpus_from_db():
     print("Gathering documents from DB...")
@@ -99,12 +155,40 @@ class Index_with_position():
             for doc_id in self.index[lemma]:
                 self.index[lemma][doc_id][0] = bm25([lemma], doc_id, self.num_documents, self.document_lengths, self.index, self.avg_doc_len)
 
+    def save_to_db(self, db_name='index_with_position.db'):
+        if not os.path.exists(db_name) or not check_schema(db_name):
+            create_schema(db_name)
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+        
+        # Insert data
+        for lemma, doc_dict in self.index.items():
+            # Insert lemma
+            cursor.execute('INSERT OR IGNORE INTO Lemmas (lemma) VALUES (?)', (lemma,))
+            cursor.execute('SELECT id FROM Lemmas WHERE lemma = ?', (lemma,))
+            lemma_id = cursor.fetchone()[0]
+            
+            for doc_id, (bm25_score, positions) in doc_dict.items():
+                # Insert document
+                cursor.execute('INSERT INTO Documents (doc_id, bm25) VALUES (?, ?)', (doc_id, bm25_score))
+                cursor.execute('SELECT id FROM Documents WHERE doc_id = ?', (doc_id,))
+                document_db_id = cursor.fetchone()[0]
+                
+                # Insert positions
+                for position in positions:
+                    cursor.execute('INSERT INTO Positions (doc_id, lemma_id, position) VALUES (?, ?, ?)', 
+                                   (document_db_id, lemma_id, position))
+        
+        conn.commit()
+        conn.close()
 
-    def get_postings(self, term):
-        return self.index.get(term, [])
+    def get_postings(self, lemma):
+        return self.index.get(lemma, [])
 
 
 if __name__ == "__main__":
     corpus = get_corpus_from_db()
     index = Index_with_position(corpus)
+    index.save_to_db()
+    print("Finished saving to database")
     
