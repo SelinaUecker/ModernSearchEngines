@@ -3,6 +3,11 @@ from collections import defaultdict
 from indexing import tokenize
 from operator import itemgetter
 
+import nltk
+nltk.download('wordnet')
+from nltk.corpus import wordnet
+import requests
+
 # TODO: Save the index (db?)
 
 def get_relevant_lemmas(tokenized_query, db_name='inverted_index.db'):
@@ -33,6 +38,21 @@ def get_relevant_lemmas(tokenized_query, db_name='inverted_index.db'):
 
     conn.close()
     return relevant_lemmas
+
+
+
+
+def get_synonyms_nltk(word):
+    synonyms = set()
+    for syn in wordnet.synsets(word):
+        for lemma in syn.lemmas():
+            synonyms.add(lemma.name())
+    return list(synonyms)
+
+def get_synonyms_datamuse(word):
+    response = requests.get(f"https://api.datamuse.com/words?rel_syn={word}")
+    synonyms = [word_obj['word'] for word_obj in response.json()]
+    return synonyms
 
 
 def query_processing(query):
