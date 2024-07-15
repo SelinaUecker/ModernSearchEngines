@@ -91,24 +91,28 @@ def is_english(html_content):
 		return match is not None or 'lang=' not in html_content
 	else:
 		return False
-	
+
+def check_keywords(url, keyword):
+	pattern = '|'.join(keyword)
+	return bool(re.search(pattern, url))
+
 # assign priorities to crawl
 def priority(url):
 	# Check if the url suggests the site to be in English
-	english_keywords = ['en.', 'english', 'us.', 'uk.', 'cad.', '/en/']
-	english = any(keyword in url.lower() for keyword in english_keywords)
+	english_keywords = ['(^|/)en\.', 'english', '(^|/)us\.', '(^|/)uk\.', '(^|/)cad\.', '/en/']
+	english = check_keywords(url, english_keywords)
 	
 	# Define certain words you want to prioritize in the URL
-	priority_keywords = {"tuebingen", "tübingen", "T%C3%BCbingen"}
-	contains_keyword = any(keyword in url.lower() for keyword in priority_keywords)
+	priority_keywords = {"tuebingen", "tübingen", "T%C3%BCbingen", "tubingen"}
+	contains_keyword = check_keywords(url, priority_keywords)
 	
 	# Assign priority based on the criteria
 	if english and contains_keyword:
 		return 1  # High priority
 	elif contains_keyword:
-		return 2  # Medium priority
-	elif english:
 		return 3  # Medium priority
+	elif english:
+		return 2  # Medium priority
 	else:
 		return 4  # Low priority
 	
@@ -162,6 +166,7 @@ def paralel_crawl(start_urls, stop_value, num_threads):
 	global visited
 	threads = []
 	frontier, visited = load_state()
+	#frontier = filter_crawl_data(frontier, "uni-tuebingen.de")
 	crawled = len(visited)
 
 	if not frontier:
@@ -197,6 +202,10 @@ def crawl(stop_value):
 				if current_url in visited or not can_fetch(current_url):
 					continue
 				visited.add(current_url)
+
+			#skip images
+			if current_url.endswith('.jpg') or current_url.endswith('.png'):
+				continue
 
 			html_content, fetched_url = fetch_page(current_url)
 
@@ -298,7 +307,8 @@ def establish_workingDB():
 	cursor.execute('''
 		CREATE TABLE IF NOT EXISTS pages (
 			url TEXT PRIMARY KEY,
-			content TEXT
+			content TEXT,
+			topics TEXT,
 		)
 	''')
 	conn.commit()
@@ -313,13 +323,77 @@ def load_workdata():
 	# load all pages from the search database
 	conn1 = sqlite3.connect('search.db')
 	cur1 = conn1.cursor()
-	cur1.execute('SELECT url, content FROM pages')
+	cur1.execute('SELECT url, content, topics FROM pages')
 	rows = cur1.fetchall()
 	conn1.close()
 
 	return rows
 
-# Example usage
+def check_Data():
+	conn1 = sqlite3.connect('web_crawler.db')
+	cur1 = conn1.cursor()
+	cur1.execute('SELECT url, content, relevant FROM pages')
+	rows = cur1.fetchall()
+	conn1.close()
+
+	englishItems = 0
+	websites= {}
+
+	for item in rows:
+		url, text ,english = item
+
+		if english:
+			englishItems += 1
+		
+		parsed_url = urlparse(url)
+		domain = parsed_url.netloc
+
+		if domain in websites:
+			websites.update({domain: websites[domain]+1})
+		else:
+			websites[domain] = 1
+
+	print(f"english websites: {englishItems}/{len(rows)}")
+	print(websites)
+
+def filter_crawl_data(frontier, to_filter):
+	new_frontier = []
+
+	with open('crawler_old_state.pkl', 'wb') as f:
+		pickle.dump((frontier, visited), f)
+
+	for url in frontier:
+		if not to_filter in url:
+			new_frontier.append(url)
+
+	return new_frontier
+
+def extend_crawl_list():
+	frontier, visited = load_state()
+	frontier = list(frontier)
+	to_append = set()
+
+	for item in frontier:
+		if isinstance(item,set):
+			frontier.remove(item)
+			continue
+		index = item.find("/de/")
+    
+		if index != -1:
+			new_str = item[:index] + "/en/"
+			to_append.add(new_str)
+
+	for item in visited:
+		index = item.find("/de/")
+    
+		if index != -1:
+			new_str = item[:index] + "/en/"
+			to_append.add(new_str)
+
+	frontier.extend(to_append)
+	save_state(frontier, visited)
+
+# usage
 if __name__ == "__main__":
 	init_db()
 	start_urls = [
@@ -330,16 +404,8 @@ if __name__ == "__main__":
 		"https://www.mygermanyvacation.com/best-things-to-do-and-see-in-tubingen-germany/",
 		"https://uni-tuebingen.de/en/"
 	]
-	startTimeCrawl = time.time()
-	#single_crawl(start_urls, 400)
-	paralel_crawl(start_urls, 12100, 6)
-	endTimeCrawl = time.time()
-	print(f"Total Time to crawl: {endTimeCrawl- startTimeCrawl}")
-
-	startTimeProcess = time.time()
-	establish_workingDB()
-	endTimeProcess = time.time()
-	print(f"Total Time to process: {endTimeProcess- startTimeProcess}")
+	paralel_crawl(start_urls, 100000, 6)
+	#check_Data()
 
 	# load data to work with
 	#data = load_workdata()
