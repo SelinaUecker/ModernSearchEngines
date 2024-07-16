@@ -109,12 +109,10 @@ def priority(url):
 	# Assign priority based on the criteria
 	if english and contains_keyword:
 		return 1  # High priority
-	elif contains_keyword:
-		return 3  # Medium priority
-	elif english:
+	elif contains_keyword or english:
 		return 2  # Medium priority
 	else:
-		return 4  # Low priority
+		return 3  # Low priority
 	
 # Single-threaded Crawling
 def single_crawl(start_urls, stop_value):
@@ -160,13 +158,12 @@ crawled = 0
 frontier = []
 visited = []
 
-def paralel_crawl(start_urls, stop_value, num_threads):
+def paralel_crawl(start_urls, stop_value, num_threads=1):
 	global crawled
 	global frontier
 	global visited
 	threads = []
 	frontier, visited = load_state()
-	#frontier = filter_crawl_data(frontier, "uni-tuebingen.de")
 	crawled = len(visited)
 
 	if not frontier:
@@ -190,10 +187,9 @@ def crawl(stop_value):
 			with frontier_lock:
 				if not frontier or crawled >= stop_value:
 					break
-				# Safe access to frontier and crawled
 				frontier = deque(sorted(frontier, key=priority))
 				current_url = frontier.popleft()
-				crawled += 1  # Increment crawled count
+				crawled += 1  
 
 		try:
 			print(f"Crawling Nr {crawled}: {current_url}")
@@ -203,8 +199,8 @@ def crawl(stop_value):
 					continue
 				visited.add(current_url)
 
-			#skip images
-			if current_url.endswith('.jpg') or current_url.endswith('.png'):
+			#skip images and pdf
+			if current_url.endswith('.jpg') or current_url.endswith('.png') or current_url.endswith('.pdf'):
 				continue
 
 			html_content, fetched_url = fetch_page(current_url)
@@ -308,7 +304,7 @@ def establish_workingDB():
 		CREATE TABLE IF NOT EXISTS pages (
 			url TEXT PRIMARY KEY,
 			content TEXT,
-			topics TEXT,
+			topics TEXT
 		)
 	''')
 	conn.commit()
@@ -405,7 +401,7 @@ if __name__ == "__main__":
 		"https://uni-tuebingen.de/en/"
 	]
 	paralel_crawl(start_urls, 100000, 6)
-	#check_Data()
+	check_Data()
 
 	# load data to work with
 	#data = load_workdata()
