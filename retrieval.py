@@ -58,7 +58,7 @@ def calculate_proximity_score(proximity_lists):
     return 0
 
 def rank_documents(index, tokenized_query, db_name='web_crawler.db'):
-    doc_scores = defaultdict(lambda: [0, 0, []])  # [sum of BM25 scores, number of matching terms]
+    doc_scores = defaultdict(lambda: [0, 0, []])  # [sum of BM25 scores, number of matching terms, positions]
 
     for lemma, position in tokenized_query:
         if lemma in index:
