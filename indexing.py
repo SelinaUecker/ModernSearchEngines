@@ -3,8 +3,13 @@ import sqlite3
 import spacy
 from collections import defaultdict
 import os
+import re
+from urllib.parse import urlparse
+import nltk
+from nltk.stem import PorterStemmer
 
 nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+stemmer = PorterStemmer()
 
 def create_schema(db_name='index_with_position.db'):
     conn = sqlite3.connect(db_name)
@@ -22,7 +27,8 @@ def create_schema(db_name='index_with_position.db'):
         CREATE TABLE IF NOT EXISTS Documents (
             id INTEGER PRIMARY KEY,
             doc_id INTEGER,
-            bm25 REAL
+            bm25 REAL,
+            lemma_id INTEGER
         )
     ''')
 
@@ -72,12 +78,29 @@ def get_corpus_from_db():
     cursor.execute('SELECT rowid, * FROM pages')
 
     corpus = cursor.fetchall() # [(id1, url1, document1), (id2, url2, document2)...]
-    # TODO: ADD parsed url name to document? In case someone searches for a specific site and not a doc.
 
     # Close the connection
     conn.close()
     print("Complete")
     return corpus
+
+def url_to_comma_separated_words(url):
+    # Parse the URL to extract the components
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
+    path = parsed_url.path
+
+    if domain.startswith('www.'):
+        domain = domain[4:]
+
+    # Split the domain and path by slashes, hyphens, and dots
+    words = re.split(r'[./\-]+', domain + path)
+
+    # Filter out any empty strings
+    words = [word for word in words if word]
+
+    # Join the words into a comma-separated string
+    return ", ".join(words)
 
 def convert_umlaute(text):
     umlaut_map = {
@@ -90,10 +113,39 @@ def convert_umlaute(text):
         text = text.replace(umlaut, replacement)
     return text
 
+
+
+def substitute_dots_in_urls(text):
+    # Regular expression to find URLs starting with http://, https://, or www.
+    url_pattern = re.compile(r'\b(?:https?://|www\.)?[^\s]+\.[^\s]+\b')
+    
+    def replace_dots(match):
+        url = match.group(0)
+        return url.replace('.', ' ')
+    
+    return url_pattern.sub(replace_dots, text)
+
 def tokenize(text):
-    # TODO: check if english?
-    doc = nlp(convert_umlaute(text.lower()))
-    return [(token.lemma_, token.idx) for token in doc if not token.is_stop and not token.is_punct]
+    text = convert_umlaute(text.lower())
+    text = substitute_dots_in_urls(text)
+    text = re.sub(r'(\d+)\)', r'\1', text)
+    text = re.sub(r'(\d+),(\d+)', r'\1\2', text)
+    text = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', text)
+    text = re.sub(r'[\/\\_\-\–\+]+', ' ', text)
+    text = text.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    doc = nlp(text)
+
+    tokens = []
+    for token in doc:
+        if not token.is_stop and not token.is_punct:
+            lemma = token.lemma_.strip()
+            stemmed = stemmer.stem(lemma).strip()
+            if stemmed:
+                tokens.append((stemmed, token.idx))
+    return tokens
+
 
 def bm25(query, doc_id, num_documents , document_lengths, index, avg_doc_len):
     k = 1.5 # controls rate of term saturation (increasing k diminishes the impact of term frequency)
@@ -132,7 +184,8 @@ class Index_with_position():
         self.avg_doc_len = 0
 
         print("Indexing documents...")
-        for doc_id, url, text in corpus:
+        for doc_id, url, doc in corpus:
+            text = url_to_comma_separated_words(url) + " " + doc
             self.add_document(doc_id, text)
             self.avg_doc_len += len(text)
         print("Complete")
@@ -160,25 +213,26 @@ class Index_with_position():
             create_schema(db_name)
         conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
-        
+
         # Insert data
         for lemma, doc_dict in self.index.items():
             # Insert lemma
             cursor.execute('INSERT OR IGNORE INTO Lemmas (lemma) VALUES (?)', (lemma,))
             cursor.execute('SELECT id FROM Lemmas WHERE lemma = ?', (lemma,))
             lemma_id = cursor.fetchone()[0]
-            
+
             for doc_id, (bm25_score, positions) in doc_dict.items():
                 # Insert document
-                cursor.execute('INSERT INTO Documents (doc_id, bm25) VALUES (?, ?)', (doc_id, bm25_score))
+                cursor.execute('INSERT OR IGNORE INTO Documents (doc_id, bm25, lemma_id) VALUES (?, ?, ?)', 
+                            (doc_id, bm25_score, lemma_id))
                 cursor.execute('SELECT id FROM Documents WHERE doc_id = ?', (doc_id,))
                 document_db_id = cursor.fetchone()[0]
-                
+
                 # Insert positions
                 for position in positions:
                     cursor.execute('INSERT INTO Positions (doc_id, lemma_id, position) VALUES (?, ?, ?)', 
-                                   (document_db_id, lemma_id, position))
-        
+                                (document_db_id, lemma_id, position))
+                    
         conn.commit()
         conn.close()
 
@@ -187,6 +241,8 @@ class Index_with_position():
 
 
 if __name__ == "__main__":
+    print(tokenize("www.google.de"))
+
     corpus = get_corpus_from_db()
     index = Index_with_position(corpus)
     index.save_to_db()
