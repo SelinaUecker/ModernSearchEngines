@@ -125,7 +125,8 @@ def substitute_dots_in_urls(text):
     
     return url_pattern.sub(replace_dots, text)
 
-def tokenize(text):
+def tokenize(text, only_unique_tokens = False):
+    unique_tokens = set()
     text = convert_umlaute(text.lower())
     text = substitute_dots_in_urls(text)
     text = re.sub(r'(\d+)\)', r'\1', text)
@@ -143,7 +144,12 @@ def tokenize(text):
             lemma = token.lemma_.strip()
             stemmed = stemmer.stem(lemma).strip()
             if stemmed:
-                tokens.append((stemmed, token.idx))
+                if only_unique_tokens:
+                    if stemmed not in unique_tokens:
+                        unique_tokens.update([stemmed])
+                        tokens.append((stemmed, token.idx))
+                else:
+                    tokens.append((stemmed, token.idx))
     return tokens
 
 

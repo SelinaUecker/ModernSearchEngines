@@ -2,8 +2,17 @@ import sqlite3
 from collections import defaultdict
 from indexing import tokenize
 from operator import itemgetter
+import string
 
-# TODO: Save the index (db?)
+import nltk
+nltk.download('wordnet')
+nltk.download('stopwords')
+from nltk.corpus import wordnet, stopwords
+from transformers import pipeline
+
+# Load a pre-trained model for fill-mask
+fill_mask = pipeline("fill-mask", model="bert-base-uncased")
+
 
 def get_relevant_lemmas(tokenized_query, db_name='inverted_index.db'):
     relevant_lemmas = defaultdict(lambda: defaultdict(lambda: [0, []]))
@@ -48,9 +57,68 @@ def get_relevant_lemmas(tokenized_query, db_name='inverted_index.db'):
     conn.close()
     return relevant_lemmas
 
+
+def get_synonyms_with_bert(word):
+
+    # Context sentences
+    context_sentences = [
+        f"The city of Tübingen is known for [MASK], which is a type of {word}.",
+        f"In Tübingen, many people look for [MASK], when they hear {word}.",
+        f"In Tübingen, a [MASK] is a place where people can find {word}.",
+        f"In a dictionary, the word {word} is another word for [MASK].",
+        f"In a conversation about {word} the word [MASK] could come up.",
+        f"The word [MASK] is a type of {word}.",
+        f"{word} is or are a type of [MASK]."
+    ]
+    
+    synonyms = set()
+    for sentence in context_sentences:
+        results = fill_mask(sentence)
+        #print(sentence, ": ")
+        for result in results:
+            synonyms.add(result['token_str'].strip())
+           # print(f"\t{result['token_str'].strip()}")
+    
+    return synonyms
+
+def remove_stopwords_and_punctuation(text):
+    # Get English stopwords
+    stop_words = set(stopwords.words('english'))
+    # Get punctuation set
+    punctuation = set(string.punctuation)
+
+    # Tokenize the text by splitting on whitespace
+    words = text.split()
+
+    # Remove stopwords and punctuation, and convert to lowercase
+    filtered_words = {
+        word.lower().strip(string.punctuation)
+        for word in words
+        if word.lower() not in stop_words and word not in punctuation
+    }
+
+    return ' '.join(filtered_words)
+
 def query_processing(query):
-    # TODO add synonyms
-    tokens = tokenize(query)
+    print("Original Query: ", query)
+    query = query.lower()
+    query = remove_stopwords_and_punctuation(query)
+    print("Preprocessed Query: ", query)
+    words = query.split()
+    extended_query = set(words)
+    # Add synonyms to query
+    for word in words:
+        if word == "tübingen" or word == "tuebingen":
+            continue
+        #synonyms = get_synonyms(word)
+        synonyms = get_synonyms_with_bert(word)
+        extended_query.update(synonyms)
+    
+    extended_query = ' '.join(extended_query)
+    extended_query = remove_stopwords_and_punctuation(extended_query)
+    print("Extended Query: ", extended_query)
+    #tokens = tokenize(query)
+    tokens = tokenize(extended_query, only_unique_tokens=True)
     return tokens
 
 def calculate_proximity_score(proximity_lists):
@@ -119,7 +187,7 @@ def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with
     results = []
     for query_number, query in queries:
         processed_query = query_processing(query)
-        print("Processed query: ", processed_query)
+        #print("Processed query: ", processed_query)
         index = get_relevant_lemmas(processed_query, db_name)
         ranked_documents = rank_documents(index, processed_query)
         results.append((query_number, ranked_documents))
