@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
 import webbrowser
-from PIL import Image, ImageTk
 
 corrected_label = None  # Global variable to track the corrected query label
 
@@ -37,17 +36,13 @@ def show_loading_indicator():
     loading_label.pack(pady=20)
 
 def update_results(new_query, topics, results):
-    global entry, corrected_label, logo_label, description_label  # Ensure 'entry' and 'corrected_label' are correctly referenced
+    global entry, corrected_label  # Ensure 'entry' and 'corrected_label' are correctly referenced
     entry.delete(0, tk.END)
     entry.insert(0, new_query)
     
     # Clear previous results
     for widget in results_frame.winfo_children():
         widget.destroy()
-
-    if corrected_label:
-        corrected_label.destroy()
-        corrected_label = None
 
     if not results:
         no_results_frame = tk.Frame(results_frame, bg="white", pady=20)
@@ -93,12 +88,12 @@ def display_corrected_query(old_query, new_query):
     if corrected_label:
         corrected_label.destroy()
     
-    corrected_label = tk.Label(search_frame, text=f"Or did you really want to search for '{old_query}'?", fg="blue", cursor="hand2", font=("Helvetica", 12, "italic"))
-    corrected_label.pack(side=tk.LEFT, anchor='w', pady=5)
+    corrected_label = tk.Label(root, text=f"Or did you really want to search for '{old_query}'?", fg="blue", cursor="hand2", font=("Helvetica", 12, "italic"))
+    corrected_label.pack(after=search_frame, pady=5)
     corrected_label.bind("<Button-1>", lambda e: search_without_spellcheck(old_query))
 
 def start_ui(process_query_cb):
-    global root, entry, results_frame, process_query_callback, search_frame, corrected_label, logo_label, description_label  # Ensure 'entry' and 'process_query_callback' are defined globally here
+    global root, entry, results_frame, process_query_callback, search_frame, corrected_label  # Ensure 'entry' and 'process_query_callback' are defined globally here
     process_query_callback = process_query_cb
 
     # Create the main window
@@ -115,21 +110,9 @@ def start_ui(process_query_cb):
     style.configure("TLabel", background="white", font=("Helvetica", 12))
     style.configure("TFrame", background="white")
 
-    # Add a logo
-    logo = Image.open("path/to/your/logo.png")  # Replace with the path to your logo
-    logo = logo.resize((150, 150), Image.ANTIALIAS)
-    logo_image = ImageTk.PhotoImage(logo)
-    logo_label = tk.Label(root, image=logo_image, bg="#f0f0f0")
-    logo_label.image = logo_image  # Keep a reference to avoid garbage collection
-    logo_label.pack(pady=20)
-
-    # Add a description label
-    description_label = tk.Label(root, text="Welcome to the Modern Search Engine. Enter your query below and press Enter to search.", bg="#f0f0f0", font=("Helvetica", 14))
-    description_label.pack(pady=10)
-
     # Create a central frame for the search bar
     search_frame = tk.Frame(root, bg="#f0f0f0")
-    search_frame.pack(pady=20)
+    search_frame.pack(pady=50)
 
     entry = tk.Entry(search_frame, width=50, font=("Helvetica", 14), bd=0, relief="flat", highlightthickness=1, highlightbackground="#d9d9d9")
     entry.pack(side=tk.TOP, padx=10, ipady=6)
