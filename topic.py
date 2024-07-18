@@ -5,28 +5,32 @@ import json
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 from WebCrawler_basis import load_workdata, establish_workingDB
+from concurrent.futures import ThreadPoolExecutor
 
-def preprocess_text(text, stopwords, lemmatizer):
+def preprocess_text(data):
+	stopwords = set(nltk.corpus.stopwords.words('english'))
+	lemmatizer = nltk.stem.WordNetLemmatizer()
+	url, website, text, topics = data
 	tokens = nltk.word_tokenize(text)
 	tokens = [word for word in tokens if word.lower() not in stopwords and word.isalpha()]
 	tokens = [lemmatizer.lemmatize(word) for word in tokens]
-	return ' '.join(tokens)
+	return url, ' '.join(tokens)
 
 def create_topic_model(data):
 	# Tokenize and preprocess
 	nltk.download('punkt')
 	nltk.download('stopwords')
 	nltk.download('wordnet')
-	stopwords = set(nltk.corpus.stopwords.words('english'))
-	lemmatizer = nltk.stem.WordNetLemmatizer()
-	preprocessed_texts = {url: preprocess_text(text, stopwords, lemmatizer) for url, text, topics in data}
+	preprocessed_texts = {}
+	with ThreadPoolExecutor() as executor:
+		preprocessed_texts = list(executor.map(preprocess_text, data))
 
 	# Vectorization
-	tfidf_vectorizer = TfidfVectorizer(max_df=0.8, min_df=2, max_features=1000)
+	tfidf_vectorizer = TfidfVectorizer(max_df=0.6, min_df=2, max_features=1000)
 	tfidf_matrix = tfidf_vectorizer.fit_transform(preprocessed_texts.values())
 
 	# Model topics
-	num_topics = 16
+	num_topics = 12
 	lda_model = LatentDirichletAllocation(n_components=num_topics, random_state=42)
 	lda_model.fit(tfidf_matrix)
 
@@ -48,9 +52,9 @@ def assign_topics(data):
 	nltk.download('punkt')
 	nltk.download('stopwords')
 	nltk.download('wordnet')
-	stopwords = set(nltk.corpus.stopwords.words('english'))
-	lemmatizer = nltk.stem.WordNetLemmatizer()
-	preprocessed_texts = {url: preprocess_text(text, stopwords, lemmatizer) for url, text, topics in data}
+	preprocessed_texts = {}
+	with ThreadPoolExecutor() as executor:
+		preprocessed_texts = list(executor.map(preprocess_text, data))
 
 	# Vectorize
 	tfidf_matrix = tfidf_vectorizer.transform(preprocessed_texts.values())
@@ -60,17 +64,17 @@ def assign_topics(data):
 	top_topics = [(-topic_dist).argsort()[:3].tolist() for topic_dist in topic_distributions]
 
 	result = []
-	for i, (url, text, topics) in enumerate(data):
-		result.append((url, text, top_topics[i]))
+	for i, (url, website, text, topics) in enumerate(data):
+		result.append((url, website, text, top_topics[i]))
 
 	return result
 
 def topics_to_descriptors(data, descriptors):
 	docs_with_descriptors = []
 
-	for url, document, topics in data:
+	for url, website, document, topics in data:
 		described_topics = [descriptors[topic] for topic in topics]
-		docs_with_descriptors.append((url, document, described_topics))
+		docs_with_descriptors.append((url, website, document, described_topics))
 
 	return docs_with_descriptors
 
@@ -78,10 +82,9 @@ def print_topics(num_words=15):
 	lda_model, tfidf_vectorizer = load_topic_model()
 	feature_names = tfidf_vectorizer.get_feature_names_out()
     
-	# Initialize a dictionary to hold the top words for each topic
 	topic_words = {i: [] for i in range(lda_model.n_components)}
 
-	# Assign each word to the topic where it has the highest weight
+	# Assign each word to the topic with its highest weight
 	for word_idx, word in enumerate(feature_names):
 		topic_idx = lda_model.components_[:, word_idx].argmax()
 		topic_words[topic_idx].append((word, lda_model.components_[topic_idx, word_idx]))
@@ -97,7 +100,7 @@ def print_topics(num_words=15):
 def update_db(data):
 	conn = sqlite3.connect('search.db')
 	cursor = conn.cursor()
-	for url, text, topics in data:
+	for url, website, text, topics in data:
 		serialized_topics = json.dumps(topics)
 		cursor.execute('''UPDATE pages SET topics = ? WHERE url = ?''', (serialized_topics, url))
 		conn.commit()
@@ -105,7 +108,7 @@ def update_db(data):
 
 def prepare_topics():
 	# create working db from crawler db and load it
-	#establish_workingDB()
+	# establish_workingDB()
 	data = load_workdata()
 
 	# create the topic model
@@ -145,7 +148,6 @@ def model_topics():
 		print(f"Url: {url}  Topics: {topics}")
 
 def remove_image_and_pdf():
-
 	# load all pages from the database of the crawler
 	conn = sqlite3.connect('web_crawler.db')
 	cursor = conn.cursor()
@@ -169,4 +171,4 @@ if __name__ == "__main__":
 	print_topics()
 
 	# assign all topics and save in db
-	model_topics()
+	#model_topics()
