@@ -3,6 +3,8 @@ from collections import defaultdict
 from indexing import tokenize
 from operator import itemgetter
 import string
+from spellchecker import SpellChecker
+
 
 import nltk
 nltk.download('wordnet')
@@ -182,7 +184,7 @@ def read_queries(query_batch_file="queries.txt"):
             queries.append((int(query_number), query_text))
     return queries
 
-def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with_position.db"):
+def batch_retrieval(query_batch_file="queries.txt", db_name="index_with_position.db"):
     queries = read_queries(query_batch_file)
     results = []
     for query_number, query in queries:
@@ -194,8 +196,6 @@ def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with
 
     return results
 
-
-
 def batch(results, output_file='batch_results.txt'):
     with open(output_file, 'w') as f:
         for result_set in results:
@@ -203,9 +203,46 @@ def batch(results, output_file='batch_results.txt'):
             for rank, (doc_id, score, url) in enumerate(result_set[1][:100], start=1):
                 f.write(f"{query_number}\t{rank}\t{url}\t{score:.3f}\n")
 
+def spellcheck(query):
+    spell = SpellChecker()
+    corrected_query = []
+    
+    # Split the query into words
+    words = query.split()
+    
+    for word in words:
+        # Check if the word is misspelled
+        if word in spell:
+            corrected_query.append(word)
+        else:
+            # Get the most probable correction
+            corrected_word = spell.correction(word)
+            corrected_query.append(corrected_word)
+    
+    # Join the corrected words back into a single string
+    return ' '.join(corrected_query)
 
+def main_retrival(query, need_spellcheck=True, index_db_name="index_with_position.db"):
+    old_query = query
+    if need_spellcheck:
+        query = spellcheck(query)
+    processed_query = query_processing(query)
+    index = get_relevant_lemmas(processed_query, db_name=index_db_name)
+    ranked_documents = rank_documents(index, processed_query)[:10]
+    return old_query, query, ranked_documents
 
 if __name__ == "__main__":
+    query = "Hotdgs ars grrat"
+    spellchecked_query = spellcheck(query)
+    print(spellchecked_query)
+
+    # Main retrieval function for UI
+    old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=True)
+    print(old_query, " | ", spellchecked_query)
+    print("Ranked Documents:")
+    for doc_id, score, url in ranked_documents:
+        print(f"Document ID: {doc_id}, URL: {url}, Score: {score}")
+
     # Example query
     example_query = "tübingen"
     processed_query = query_processing(example_query)
@@ -224,7 +261,7 @@ if __name__ == "__main__":
 
 
     # Get results for query batch file
-    batched_ranked_documents = retrieve_batched_queries("queries.txt", "index_with_position.db")
+    batched_ranked_documents = batch_retrieval("queries.txt", "index_with_position.db")
     # Write batch results to file
     batch(batched_ranked_documents)
 
