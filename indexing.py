@@ -7,6 +7,7 @@ import re
 from urllib.parse import urlparse
 import nltk
 from nltk.stem import PorterStemmer
+from tqdm import tqdm
 
 nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 stemmer = PorterStemmer()
@@ -68,14 +69,14 @@ def check_schema(db_name='inverted_index.db'):
     conn.close()
     return has_lemmas and has_documents and has_positions
 
-def get_corpus_from_db():
+def get_corpus_from_db(db_name = 'web_crawler.db'):
     print("Gathering documents from DB...")
     # Connect to database
-    conn = sqlite3.connect('web_crawler.db')
+    conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
 
     # Fetch data
-    cursor.execute('SELECT rowid, * FROM pages')
+    cursor.execute('SELECT rowid, * FROM pages WHERE relevant = 1')
 
     corpus = cursor.fetchall() # [(id1, url1, document1), (id2, url2, document2)...]
 
@@ -113,43 +114,46 @@ def convert_umlaute(text):
         text = text.replace(umlaut, replacement)
     return text
 
-
-
 def substitute_dots_in_urls(text):
-    # Regular expression to find URLs starting with http://, https://, or www.
-    url_pattern = re.compile(r'\b(?:https?://|www\.)?[^\s]+\.[^\s]+\b')
-    
+    url_pattern = re.compile(r'\b(?:https?://|www\.)[^\s]+\.[^\s]+\b')
     def replace_dots(match):
         url = match.group(0)
         return url.replace('.', ' ')
     
     return url_pattern.sub(replace_dots, text)
 
-def tokenize(text, only_unique_tokens = False):
+def split_text(text, max_length):
+    for i in range(0, len(text), max_length):
+        yield text[i:i + max_length]
+
+def tokenize(text, only_unique_tokens=False):
+    split_length = 800000
     unique_tokens = set()
-    text = convert_umlaute(text.lower())
-    text = substitute_dots_in_urls(text)
-    text = re.sub(r'(\d+)\)', r'\1', text)
-    text = re.sub(r'(\d+),(\d+)', r'\1\2', text)
-    text = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', text)
-    text = re.sub(r'[\/\\_\-\–\+]+', ' ', text)
-    text = text.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    doc = nlp(text)
-
     tokens = []
-    for token in doc:
-        if not token.is_stop and not token.is_punct:
-            lemma = token.lemma_.strip()
-            stemmed = stemmer.stem(lemma).strip()
-            if stemmed:
-                if only_unique_tokens:
-                    if stemmed not in unique_tokens:
-                        unique_tokens.update([stemmed])
+
+    for chunk in split_text(text, split_length):  # Split the text into chunks
+        chunk = convert_umlaute(chunk.lower())
+        chunk = substitute_dots_in_urls(chunk)
+        chunk = re.sub(r'(\d+)\)', r'\1', chunk)
+        chunk = re.sub(r'(\d+),(\d+)', r'\1\2', chunk)
+        chunk = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', chunk)
+        chunk = re.sub(r'[\/\\_\-\–\+]+', ' ', chunk)
+        chunk = chunk.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+        chunk = re.sub(r'\s+', ' ', chunk).strip()
+
+        doc = nlp(chunk)
+        for token in doc:
+            if not token.is_stop and not token.is_punct:
+                lemma = token.lemma_.strip()
+                stemmed = stemmer.stem(lemma).strip()
+                if stemmed:
+                    if only_unique_tokens:
+                        if stemmed not in unique_tokens:
+                            unique_tokens.update([stemmed])
+                            tokens.append((stemmed, token.idx))
+                    else:
                         tokens.append((stemmed, token.idx))
-                else:
-                    tokens.append((stemmed, token.idx))
+    
     return tokens
 
 
@@ -190,7 +194,9 @@ class Index_with_position():
         self.avg_doc_len = 0
 
         print("Indexing documents...")
-        for doc_id, url, doc in corpus:
+        for doc_id, url, doc, relevant in tqdm(corpus):
+            if len(doc) > 2000000:
+                continue
             text = url_to_comma_separated_words(url) + " " + doc
             self.add_document(doc_id, text)
             self.avg_doc_len += len(text)
@@ -221,7 +227,7 @@ class Index_with_position():
         cursor = conn.cursor()
 
         # Insert data
-        for lemma, doc_dict in self.index.items():
+        for lemma, doc_dict in tqdm(self.index.items()):
             # Insert lemma
             cursor.execute('INSERT OR IGNORE INTO Lemmas (lemma) VALUES (?)', (lemma,))
             cursor.execute('SELECT id FROM Lemmas WHERE lemma = ?', (lemma,))
@@ -245,12 +251,10 @@ class Index_with_position():
     def get_postings(self, lemma):
         return self.index.get(lemma, [])
 
-
+# Example Usage
 if __name__ == "__main__":
-    print(tokenize("www.google.de"))
-
-    corpus = get_corpus_from_db()
+    corpus = get_corpus_from_db(db_name = 'web_crawler.db')[:5000]
     index = Index_with_position(corpus)
     index.save_to_db()
-    print("Finished saving to database")
+    
     
