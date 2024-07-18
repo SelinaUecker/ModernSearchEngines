@@ -6,3 +6,4 @@ index_with_position.db
 __pycache__/retrieval.cpython-310.pyc
 __pycache__/indexing.cpython-310.pyc
 batch_results.txt
+search.db

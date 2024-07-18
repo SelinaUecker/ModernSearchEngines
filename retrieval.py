@@ -204,7 +204,12 @@ def batch(results, output_file='batch_results.txt'):
                 f.write(f"{query_number}\t{rank}\t{url}\t{score:.3f}\n")
 
 def spellcheck(query):
-    spell = SpellChecker()
+    spell_en = SpellChecker()
+    spell_ger = SpellChecker(language='de')
+
+    spell_en.word_frequency.load_words(["tübingen", "tuebingen"])
+    spell_ger.word_frequency.load_words(["tübingen", "tuebingen"])
+
     corrected_query = []
     
     # Split the query into words
@@ -212,11 +217,15 @@ def spellcheck(query):
     
     for word in words:
         # Check if the word is misspelled
-        if word in spell:
+        if word in spell_en:
             corrected_query.append(word)
         else:
             # Get the most probable correction
-            corrected_word = spell.correction(word)
+            corrected_word = spell_en.correction(word)
+            if not corrected_word:
+                corrected_word = spell_ger.correction(word)
+                if not corrected_word:
+                    corrected_word = word
             corrected_query.append(corrected_word)
     
     # Join the corrected words back into a single string
@@ -232,9 +241,10 @@ def main_retrival(query, need_spellcheck=True, index_db_name="index_with_positio
     return old_query, query, ranked_documents
 
 if __name__ == "__main__":
-    query = "Hotdgs ars grrat"
+    query = "Tübingen tubingen"
     spellchecked_query = spellcheck(query)
-    print(spellchecked_query)
+    print("Original Query: ", query)
+    print("Spellchecked Query: ", spellchecked_query)
 
     # Main retrieval function for UI
     old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=True)
