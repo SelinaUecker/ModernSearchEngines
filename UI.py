@@ -1,22 +1,9 @@
 import tkinter as tk
 from tkinter import ttk
-from transformers import pipeline
-import re
 import webbrowser
+from PIL import Image, ImageTk
 
-# Load the pipeline for spell correction
-fix_spelling = pipeline("text2text-generation", model="oliverguhr/spelling-correction-english-base")
-
-def normalize_text(text):
-    # Remove punctuation and convert to lowercase
-    return re.sub(r'[^\w\s]', '', text).lower()
-
-def correct_text(text):
-    result = fix_spelling(text, max_length=2048)
-    corrected_text = result[0]['generated_text']
-    # Remove trailing period
-    corrected_text = corrected_text.rstrip('.')
-    return corrected_text
+corrected_label = None  # Global variable to track the corrected query label
 
 def toggle_preview(event, preview_label, toggle_label):
     if preview_label.winfo_ismapped():
@@ -26,132 +13,178 @@ def toggle_preview(event, preview_label, toggle_label):
         preview_label.pack(fill=tk.X, pady=5)
         toggle_label.config(text="Less")
 
-def search(event=None, query=None):
-    if query is None:
-        query = entry.get()
+def search(event=None):
+    query = entry.get()
+    if query:
+        if corrected_label:
+            corrected_label.destroy()
+        show_loading_indicator()
+        process_query_callback(query, use_spellcheck=True)
 
-    if not query:
-        return  # Do nothing if the input field is empty
+def search_without_spellcheck(query):
+    global corrected_label
+    if query:
+        show_loading_indicator()
+        process_query_callback(query, use_spellcheck=False)
+    if corrected_label:
+        corrected_label.destroy()
+        corrected_label = None
 
-    # Clear previous spell suggestion
-    spell_suggestion_label.config(text="")
-    spell_suggestion_label.unbind("<Button-1>")
+def show_loading_indicator():
+    for widget in results_frame.winfo_children():
+        widget.destroy()
+    loading_label = tk.Label(results_frame, text="Loading...", bg="white", font=("Helvetica", 12, "italic"))
+    loading_label.pack(pady=20)
 
-    # Correct the query
-    corrected_query = correct_text(query)
-
-    # Normalize both the original and corrected queries to check for meaningful changes
-    normalized_original = normalize_text(query)
-    normalized_corrected = normalize_text(corrected_query)
-
-    if normalized_corrected != normalized_original:
-        spell_suggestion_label.config(
-            text=f"Did you mean '{corrected_query}'? Click here to search."
-        )
-        spell_suggestion_label.bind("<Button-1>", lambda e: update_query(corrected_query))
-
-    # Simulate search results
-    results = [
-        {
-            "Name of site": f"Site {i+1}",
-            "Url": f"https://www.site{i+1}.com",
-            "Keywords": f"keyword1, keyword2, keyword{i+1}",
-            "Preview": "This is a dummy preview text for the website content. It provides a brief summary of what the website is about."
-        } for i in range(10)
-    ]
+def update_results(new_query, topics, results):
+    global entry, corrected_label, logo_label, description_label  # Ensure 'entry' and 'corrected_label' are correctly referenced
+    entry.delete(0, tk.END)
+    entry.insert(0, new_query)
     
     # Clear previous results
     for widget in results_frame.winfo_children():
         widget.destroy()
-    
-    # Display new results
+
+    if corrected_label:
+        corrected_label.destroy()
+        corrected_label = None
+
+    if not results:
+        no_results_frame = tk.Frame(results_frame, bg="white", pady=20)
+        no_results_frame.pack(fill=tk.BOTH, expand=True)
+
+        no_results_label = tk.Label(no_results_frame, text="No results found", bg="white", font=("Helvetica", 14, "bold"))
+        no_results_label.pack(pady=10)
+
+        no_results_icon = tk.Label(no_results_frame, text="😞", bg="white", font=("Helvetica", 50))
+        no_results_icon.pack()
+    else:
+        display_results(results)
+
+def display_results(results):
     for result in results:
-        result_frame = tk.Frame(results_frame, bg="white", bd=2, relief="solid", padx=10, pady=5)
+        result_frame = tk.Frame(results_frame, bg="white", bd=0, relief="solid", padx=10, pady=5)
         result_frame.pack(fill=tk.X, pady=5)
 
-        title_label = tk.Label(result_frame, text=f"Name of site: {result['Name of site']}", bg="white", font=("Arial", 12, "bold"))
+        title_label = tk.Label(result_frame, text=f"Name of site: {result['Name of site']}", bg="white", font=("Helvetica", 14, "bold"))
         title_label.pack(anchor="w")
 
-        url_label = tk.Label(result_frame, text=f"Url: {result['Url']}", bg="white", font=("Arial", 10), fg="blue", cursor="hand2")
+        url_label = tk.Label(result_frame, text=f"Url: {result['Url']}", bg="white", font=("Helvetica", 12), fg="blue", cursor="hand2")
         url_label.pack(anchor="w")
         url_label.bind("<Button-1>", lambda e, url=result['Url']: webbrowser.open(url))
 
-        keywords_label = tk.Label(result_frame, text=f"Keywords: {result['Keywords']}", bg="white", font=("Arial", 10))
+        keywords_label = tk.Label(result_frame, text=f"Keywords: {result['Keywords']}", bg="white", font=("Helvetica", 12))
         keywords_label.pack(anchor="w")
 
-        toggle_label = tk.Label(result_frame, text="More", bg="white", font=("Arial", 10), fg="blue", cursor="hand2")
+        toggle_label = tk.Label(result_frame, text="More", bg="white", font=("Helvetica", 12), fg="blue", cursor="hand2")
         toggle_label.pack(anchor="w", pady=(5, 0))
 
-        preview_label = tk.Label(result_frame, text=result['Preview'], bg="white", font=("Arial", 10), wraplength=480, padx=10, pady=5, relief="solid", bd=1)
+        preview_label = tk.Label(result_frame, text=result['Preview'], bg="#f9f9f9", font=("Helvetica", 12), wraplength=480, padx=10, pady=5, relief="solid", bd=1)
         preview_label.pack_forget()
         
         result_frame.bind("<Button-1>", lambda e, pl=preview_label, tl=toggle_label: toggle_preview(e, pl, tl))
         toggle_label.bind("<Button-1>", lambda e, pl=preview_label, tl=toggle_label: toggle_preview(e, pl, tl))
 
-def update_query(corrected_query):
+def display_corrected_query(old_query, new_query):
+    global corrected_label
     entry.delete(0, tk.END)
-    entry.insert(0, corrected_query)
-    search(query=corrected_query)
+    entry.insert(0, new_query)
+    
+    if corrected_label:
+        corrected_label.destroy()
+    
+    corrected_label = tk.Label(search_frame, text=f"Or did you really want to search for '{old_query}'?", fg="blue", cursor="hand2", font=("Helvetica", 12, "italic"))
+    corrected_label.pack(side=tk.LEFT, anchor='w', pady=5)
+    corrected_label.bind("<Button-1>", lambda e: search_without_spellcheck(old_query))
 
-# Create the main window
-root = tk.Tk()
-root.title("Simple Search Engine")
-root.geometry("600x600")  # Fixed window size
-root.resizable(False, False)
+def start_ui(process_query_cb):
+    global root, entry, results_frame, process_query_callback, search_frame, corrected_label, logo_label, description_label  # Ensure 'entry' and 'process_query_callback' are defined globally here
+    process_query_callback = process_query_cb
 
-# Set the background color
-root.configure(bg="white")
+    # Create the main window
+    root = tk.Tk()
+    root.title("Modern Search Engine")
+    root.state('zoomed')  # Open in full-screen mode
 
-# Create a style for the widgets
-style = ttk.Style()
-style.configure("TEntry", padding=6, relief="flat", background="white")
-style.configure("TButton", padding=6, relief="flat", background="light blue", foreground="white", font=("Arial", 10, "bold"))
-style.configure("TLabel", background="white", font=("Arial", 10))
-style.configure("TListbox", background="white", font=("Arial", 10))
+    # Set the background color
+    root.configure(bg="#f0f0f0")
 
-# Create an entry widget for the search query
-entry = ttk.Entry(root, width=50)
-entry.pack(pady=10)
+    # Create a style for the widgets
+    style = ttk.Style()
+    style.configure("TEntry", padding=6, relief="flat", background="white", font=("Helvetica", 14))
+    style.configure("TLabel", background="white", font=("Helvetica", 12))
+    style.configure("TFrame", background="white")
 
-# Bind the Enter key to the search function
-entry.bind('<Return>', search)
+    # Add a logo
+    logo = Image.open("path/to/your/logo.png")  # Replace with the path to your logo
+    logo = logo.resize((150, 150), Image.ANTIALIAS)
+    logo_image = ImageTk.PhotoImage(logo)
+    logo_label = tk.Label(root, image=logo_image, bg="#f0f0f0")
+    logo_label.image = logo_image  # Keep a reference to avoid garbage collection
+    logo_label.pack(pady=20)
 
-# Create a label for spell check suggestion
-spell_suggestion_label = ttk.Label(root, foreground="blue", cursor="hand2")
-spell_suggestion_label.pack(pady=5)
+    # Add a description label
+    description_label = tk.Label(root, text="Welcome to the Modern Search Engine. Enter your query below and press Enter to search.", bg="#f0f0f0", font=("Helvetica", 14))
+    description_label.pack(pady=10)
 
-# Create a frame to display search results with a scrollbar
-results_container = tk.Frame(root, bg="light blue")
-results_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    # Create a central frame for the search bar
+    search_frame = tk.Frame(root, bg="#f0f0f0")
+    search_frame.pack(pady=20)
 
-canvas = tk.Canvas(results_container, bg="light blue")
-canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    entry = tk.Entry(search_frame, width=50, font=("Helvetica", 14), bd=0, relief="flat", highlightthickness=1, highlightbackground="#d9d9d9")
+    entry.pack(side=tk.TOP, padx=10, ipady=6)
+    entry.insert(0, "Enter your search query here...")
 
-scrollbar = ttk.Scrollbar(results_container, orient="vertical", command=canvas.yview)
-scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    def on_entry_click(event):
+        if entry.get() == "Enter your search query here...":
+            entry.delete(0, "end")  # delete all the text in the entry
+            entry.insert(0, "")  # Insert blank for user input
 
-canvas.configure(yscrollcommand=scrollbar.set)
+    def on_focusout(event):
+        if entry.get() == "":
+            entry.insert(0, "Enter your search query here...")
 
-results_frame = tk.Frame(canvas, bg="light blue")
-canvas_window = canvas.create_window((0, 0), window=results_frame, anchor="nw")
+    entry.bind("<FocusIn>", on_entry_click)
+    entry.bind("<FocusOut>", on_focusout)
 
-def on_canvas_configure(event):
-    canvas.itemconfig(canvas_window, width=event.width)
+    # Bind the Enter key to the search function
+    entry.bind('<Return>', search)
 
-canvas.bind('<Configure>', on_canvas_configure)
+    # Create a frame to display search results with a scrollbar
+    results_container = tk.Frame(root, bg="#f0f0f0")
+    results_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-def on_frame_configure(event):
-    canvas.configure(scrollregion=canvas.bbox("all"))
+    canvas = tk.Canvas(results_container, bg="#f0f0f0")
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-results_frame.bind('<Configure>', on_frame_configure)
+    scrollbar = ttk.Scrollbar(results_container, orient="vertical", command=canvas.yview)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-# Bind mouse wheel events to the canvas
-def on_mouse_wheel(event):
-    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    canvas.configure(yscrollcommand=scrollbar.set)
 
-canvas.bind_all("<MouseWheel>", on_mouse_wheel)
-canvas.bind_all("<Button-4>", on_mouse_wheel)
-canvas.bind_all("<Button-5>", on_mouse_wheel)
+    results_frame = tk.Frame(canvas, bg="#f0f0f0")
+    canvas_window = canvas.create_window((0, 0), window=results_frame, anchor="nw")
 
-# Run the application
-root.mainloop()
+    def on_canvas_configure(event):
+        canvas.itemconfig(canvas_window, width=event.width - scrollbar.winfo_width())  # Adjust canvas width
+
+    canvas.bind('<Configure>', on_canvas_configure)
+
+    def on_frame_configure(event):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    results_frame.bind('<Configure>', on_frame_configure)
+
+    # Bind mouse wheel events to the canvas
+    def on_mouse_wheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    canvas.bind_all("<MouseWheel>", on_mouse_wheel)
+    canvas.bind_all("<Button-4>", on_mouse_wheel)
+    canvas.bind_all("<Button-5>", on_mouse_wheel)
+
+    # Run the application
+    root.mainloop()
+
+if __name__ == "__main__":
+    start_ui(fetch_and_display_results)  # Using the actual function for processing queries
