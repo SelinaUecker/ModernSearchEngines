@@ -3,14 +3,14 @@ from collections import defaultdict
 from indexing import tokenize
 from operator import itemgetter
 import string
-from spellchecker import SpellChecker
-
 
 import nltk
 nltk.download('wordnet')
 nltk.download('stopwords')
 from nltk.corpus import wordnet, stopwords
 from transformers import pipeline
+
+from itertools import product
 
 # Load a pre-trained model for fill-mask
 fill_mask = pipeline("fill-mask", model="bert-base-uncased")
@@ -124,10 +124,25 @@ def query_processing(query):
     return tokens
 
 def calculate_proximity_score(proximity_lists):
-    # TODO
-    return 0
+     # FOR REFERENCE: lemma: doc_id: [BM25, [positions where lemma occurs in document]]
+
+    # Return the highest proximity score if there is only one term (avoid division by zero) TODO: Check oprimal value to return in this case
+    if len(proximity_lists) <= 1:
+        return 0.0
+    
+    # Generate all possible combinations of positions (one position from each term)
+    combinations = product(*proximity_lists)
+
+    min_span = min([max(comb) - min(comb) +1 for comb in combinations])
+
+    # Normalization on query length. Is it a good idea? TODO: Check
+    normalized_span = min_span / len(proximity_lists)
+
+    return 1/normalized_span if normalized_span > 0 else 0
+
 
 def rank_documents(index, tokenized_query, db_name='web_crawler.db'):
+    alpha = 0.7  # Weight for BM25 score and proximity score (1-alpha is the weight for proximity score)
     doc_scores = defaultdict(lambda: [0, 0, []])  # [sum of BM25 scores, number of matching terms, positions]
 
     for lemma, position in tokenized_query:
@@ -153,7 +168,7 @@ def rank_documents(index, tokenized_query, db_name='web_crawler.db'):
         normalized_scores = {}
 
     # Add proximity score to normalized scores
-    final_scores = {doc_id: normalized_score + calculate_proximity_score(doc_scores[doc_id][2])
+    final_scores = {doc_id: alpha * normalized_score + (1-alpha)*calculate_proximity_score(doc_scores[doc_id][2])
                     for doc_id, normalized_score in normalized_scores.items()}
 
     ranked_docs = sorted(final_scores.items(), key=itemgetter(1), reverse=True)
@@ -184,7 +199,7 @@ def read_queries(query_batch_file="queries.txt"):
             queries.append((int(query_number), query_text))
     return queries
 
-def batch_retrieval(query_batch_file="queries.txt", db_name="index_with_position.db"):
+def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with_position.db"):
     queries = read_queries(query_batch_file)
     results = []
     for query_number, query in queries:
@@ -196,6 +211,8 @@ def batch_retrieval(query_batch_file="queries.txt", db_name="index_with_position
 
     return results
 
+
+
 def batch(results, output_file='batch_results.txt'):
     with open(output_file, 'w') as f:
         for result_set in results:
@@ -203,56 +220,9 @@ def batch(results, output_file='batch_results.txt'):
             for rank, (doc_id, score, url) in enumerate(result_set[1][:100], start=1):
                 f.write(f"{query_number}\t{rank}\t{url}\t{score:.3f}\n")
 
-def spellcheck(query):
-    spell_en = SpellChecker()
-    spell_ger = SpellChecker(language='de')
 
-    spell_en.word_frequency.load_words(["tübingen", "tuebingen"])
-    spell_ger.word_frequency.load_words(["tübingen", "tuebingen"])
-
-    corrected_query = []
-    
-    # Split the query into words
-    words = query.split()
-    
-    for word in words:
-        # Check if the word is misspelled
-        if word in spell_en:
-            corrected_query.append(word)
-        else:
-            # Get the most probable correction
-            corrected_word = spell_en.correction(word)
-            if not corrected_word:
-                corrected_word = spell_ger.correction(word)
-                if not corrected_word:
-                    corrected_word = word
-            corrected_query.append(corrected_word)
-    
-    # Join the corrected words back into a single string
-    return ' '.join(corrected_query)
-
-def main_retrival(query, need_spellcheck=True, index_db_name="index_with_position.db"):
-    old_query = query
-    if need_spellcheck:
-        query = spellcheck(query)
-    processed_query = query_processing(query)
-    index = get_relevant_lemmas(processed_query, db_name=index_db_name)
-    ranked_documents = rank_documents(index, processed_query)[:10]
-    return old_query, query, ranked_documents
 
 if __name__ == "__main__":
-    query = "Tübingen tubingen"
-    spellchecked_query = spellcheck(query)
-    print("Original Query: ", query)
-    print("Spellchecked Query: ", spellchecked_query)
-
-    # Main retrieval function for UI
-    old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=True)
-    print(old_query, " | ", spellchecked_query)
-    print("Ranked Documents:")
-    for doc_id, score, url in ranked_documents:
-        print(f"Document ID: {doc_id}, URL: {url}, Score: {score}")
-
     # Example query
     example_query = "tübingen"
     processed_query = query_processing(example_query)
@@ -271,7 +241,7 @@ if __name__ == "__main__":
 
 
     # Get results for query batch file
-    batched_ranked_documents = batch_retrieval("queries.txt", "index_with_position.db")
+    batched_ranked_documents = retrieve_batched_queries("queries.txt", "index_with_position.db")
     # Write batch results to file
     batch(batched_ranked_documents)
 
