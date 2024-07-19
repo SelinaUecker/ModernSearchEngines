@@ -7,17 +7,20 @@ from spellchecker import SpellChecker
 from tqdm import tqdm
 
 import nltk
-nltk.download('wordnet')
+from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize
 nltk.download('stopwords')
-from nltk.corpus import wordnet, stopwords
+nltk.download('punkt')
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+
 from transformers import pipeline
 import math
 from heapq import heapify, heappop, heappush
-from itertools import product
 
 # Load a pre-trained model for fill-mask
 fill_mask = pipeline("fill-mask", model="bert-base-uncased")
-
 
 def get_relevant_lemmas(tokenized_query, db_name='inverted_index.db'):
     print("Collecting relevant index...")
@@ -68,6 +71,8 @@ def get_synonyms_with_bert(word):
 
     # Context sentences
     context_sentences = [
+        f"The word [MASK] is a synonym for the word {word}.",
+        f"The word [MASK] means the same as the word {word}.",
         f"Tourists that look for {word} should search for the word [MASK] in their search engine.",
         f"People that live in a historical university town that has a castle and is next a river, that look for {word} should search for the word [MASK] in their search engine.",
         f"Tourists that are visiting a historical university town that has a castle and is next a river, that look for {word} should search for the word [MASK] in their search engine.",
@@ -79,14 +84,21 @@ def get_synonyms_with_bert(word):
         f"The word [MASK] is a type of {word}.",
         f"{word} is or are a type of [MASK]."
     ]
-
+    # Synonyms that are filtered out.
+    filtered_synonyms = {"fuck", "hotel", "bad", "god", "love"}
+    # Only the first 2 prompts are used for these words
+    partially_filtered_words = {"expensive", "inexpensive", "cheap", "luxurious", "luxury", "rare", "unique", "special"}
     # Find synonyms
     synonyms = dict()
-    for sentence in context_sentences:
+    for i, sentence in enumerate(context_sentences):
         results = fill_mask(sentence)
         #print(sentence, ": ")
         for result in results:
             synonym = result['token_str'].strip()
+            if synonym in filtered_synonyms:
+                continue
+            if i > 2 and word in partially_filtered_words:
+                continue
             #print(synonym)
             if synonym not in synonyms:
                 synonyms[synonym] = 1
@@ -95,13 +107,19 @@ def get_synonyms_with_bert(word):
 
     # Sort the synonyms in decreasing number of occurences 
     results = list(item[0] for item in sorted(synonyms.items(), key=lambda s: s[1], reverse=True))
+    if word in partially_filtered_words:
+        results = results[:2]
     return results
+
+
 
 def remove_stopwords_and_punctuation(text):
     # Get English stopwords
     stop_words = set(stopwords.words('english'))
     # Get punctuation set
     punctuation = set(string.punctuation)
+
+    words_to_filter = {"good", "nice", "okay", "sensible", "popular", "frequented", "recommend", "recommended", "competent"}
 
     # Tokenize the text by splitting on whitespace
     words = text.split()
@@ -110,10 +128,16 @@ def remove_stopwords_and_punctuation(text):
     filtered_words = {
         word.lower().strip(string.punctuation)
         for word in words
-        if word.lower() not in stop_words and word not in punctuation
+        if word.lower() not in stop_words and word not in punctuation and word.lower()
     }
 
-    return ' '.join(filtered_words)
+    better_filtered_words =  {
+        word
+        for word in filtered_words
+        if word not in words_to_filter
+    }
+
+    return ' '.join(filtered_words) if len(better_filtered_words) == 0 else ' '.join(better_filtered_words)
 
 def query_processing(query):
     print("Original Query: ", query)
@@ -121,23 +145,28 @@ def query_processing(query):
     query = remove_stopwords_and_punctuation(query)
     print("Preprocessed Query: ", query)
     words = query.split()
+    words.append("tuebingen")
     extended_query = set(words)
+    num_of_synonyms_per_query_term = max(0, 6 - len(words))
+    filtered_words = {"tübingen", "tuebingen", "good", "nice", "okay", "sensible", "popular", "frequented", "recommend", "recommended", "competent", "renowned", "bad", "unpleasant", 
+                      "pleasant"}
+
     # Add synonyms to query
-    for word in words:
-        if word == "tübingen" or word == "tuebingen":
-            continue
-        # Update query with the best synonyms found
-        synonyms = get_synonyms_with_bert(word)[:7]
-        extended_query.update(synonyms)
+    if num_of_synonyms_per_query_term > 0:
+        for word in words:
+            if word in filtered_words:
+                continue
+            # Update query with the best synonyms found
+            synonyms = get_synonyms_with_bert(word)[:num_of_synonyms_per_query_term]
+            extended_query.update(synonyms)
     
     extended_query = ' '.join(extended_query)
     extended_query = remove_stopwords_and_punctuation(extended_query)
     # Add tuebingen to the query to encourage Tübingen specific results
-    extended_query = extended_query + " tuebingen"
     print("Extended Query: ", extended_query)
     #tokens = tokenize(query)
     tokens = tokenize(extended_query, only_unique_tokens=True)
-    return tokens
+    return tokens, extended_query
 
 def calculate_proximity_score(proximity_lists):
     # Return 0 if there is only one term (avoid division by zero)
@@ -180,9 +209,9 @@ def normalize_scores(scores):
         return {doc_id: 0.0 for doc_id in scores}  # Avoid division by zero if all scores are the same
     return {doc_id: (score - min_score) / (max_score - min_score) for doc_id, score in scores.items()}
 
-def rank_documents(index, tokenized_query, db_name='search.db'):
-    # Weight for BM25 score and proximity score (1-alpha is the weight for proximity score)
-    alpha = 0.7 
+def rank_documents(index, tokenized_query, db_name='search.db', alpha=0.7 ):
+    # alpha: Weight for BM25 score and proximity score (1-alpha is the weight for proximity score)
+
     print("Ranking Documents...")
     doc_scores = defaultdict(lambda: [0, 0, []])  # [sum of BM25 scores, number of matching terms, positions]
     query_is_only_tuebingen = True if len(tokenized_query) == 1 and tokenized_query[0][0] == 'tuebingen' else False
@@ -190,8 +219,7 @@ def rank_documents(index, tokenized_query, db_name='search.db'):
         if lemma in index:
             doc_ids = index[lemma]
             for doc_id, (bm25_score, positions) in doc_ids.items():
-                # Rank Tübingen related documents higher
-                # bm25 score
+                # Add BM25 score, but rank Tübingen related documents higher
                 doc_scores[doc_id][0] += 1000 if lemma == "tuebingen" and not query_is_only_tuebingen else bm25_score
                 # Counter for number of matching terms
                 doc_scores[doc_id][1] += 1
@@ -204,10 +232,13 @@ def rank_documents(index, tokenized_query, db_name='search.db'):
     # Normalize combined scores
     normalized_combined_scores = normalize_scores(combined_scores)
 
-    # Add proximity score to normalized scores
+    # Calculate and normalize proximity score
     print("Calculating proximity Scores...")
     proximity_scores = {doc_id: calculate_proximity_score(doc_scores[doc_id][2]) for doc_id in doc_scores}
+
     normalized_proximity_scores = normalize_scores(proximity_scores)
+
+    # Add normalized proximity score to normalized scores
     final_scores = {doc_id: alpha * normalized_score + (1-alpha)*normalized_proximity_scores[doc_id]
                     for doc_id, normalized_score in normalized_combined_scores.items()}
 
@@ -227,7 +258,7 @@ def rank_documents(index, tokenized_query, db_name='search.db'):
             url = row[0]
             name = row[1]
             topics = row[2]
-            ranked_docs_with_info.append((doc_id, score, url, name, topics))
+            ranked_docs_with_info.append([doc_id, score, url, name, topics])
 
     conn.close()
 
@@ -246,15 +277,15 @@ def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with
     queries = read_queries(query_batch_file)
     results = []
     for query_number, query in queries:
-        processed_query = query_processing(query)
+        tokenized_processed_query, processed_query = query_processing(query)
         #print("Processed query: ", processed_query)
-        index = get_relevant_lemmas(processed_query, db_name)
-        ranked_documents = rank_documents(index, processed_query)
+        index = get_relevant_lemmas(tokenized_processed_query, db_name)
+        ranked_documents = rank_documents(index, tokenized_processed_query)
         results.append((query_number, ranked_documents))
 
     return results
 
-def write_batch_results(results, output_file='batch_results.txt'):
+def batch(results, output_file='batch_results.txt'):
     print("Writing batch results to File")
     with open(output_file, 'w') as f:
         for result_set in tqdm(results):
@@ -291,30 +322,85 @@ def spellcheck(query):
     # Join the corrected words back into a single string
     return ' '.join(corrected_query)
 
+def get_document_from_db(url, db_name='search.db'):
+    # Connect to the database
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+    
+    # Fetch the document with the given doc_id
+    cursor.execute('SELECT content FROM pages WHERE url = ?', (url,))
+    result = cursor.fetchone()
+    
+    # Close the connection
+    conn.close()
+    
+    # Return the document text if found, otherwise return None
+    return result[0] if result else None
+
+def get_relevant_snippet(query, url, db_name='search.db'):
+    # Get the document from the database
+    document = get_document_from_db(url, db_name)
+    
+    if not document:
+        return "Document not found."
+    
+    # Tokenize the document into sentences
+    sentences = sent_tokenize(document)
+    
+    # If the document is too short, return it directly
+    if len(sentences) == 1:
+        return sentences[0]
+    
+    # Create a TF-IDF Vectorizer
+    vectorizer = TfidfVectorizer().fit(sentences + [query])
+    
+    # Transform sentences and the query into TF-IDF vectors
+    sentence_vectors = vectorizer.transform(sentences)
+    query_vector = vectorizer.transform([query])
+    
+    # Calculate cosine similarity between the query and each sentence
+    cosine_similarities = (sentence_vectors * query_vector.T).toarray().flatten()
+    
+    # Find the sentence with the highest cosine similarity
+    most_relevant_index = np.argmax(cosine_similarities)
+    
+    # Return the most relevant sentence as the snippet
+    return sentences[most_relevant_index]
+
 def main_retrival(query, need_spellcheck=True, index_db="index_with_position.db", search_db="search.db"):
     old_query = query
+    
     if need_spellcheck:
         query = spellcheck(query)
-    processed_query = query_processing(query)
-    index = get_relevant_lemmas(processed_query, db_name=index_db)
-    ranked_documents = rank_documents(index, processed_query, db_name=search_db)[:10]
+
+    tokenized_processed_query, processed_query = query_processing(query)
+    index = get_relevant_lemmas(tokenized_processed_query, db_name=index_db)
+    ranked_documents = rank_documents(index, tokenized_processed_query, db_name=search_db)[:10]
+    for i,  [doc_id, score, url, name, topics] in enumerate(ranked_documents):
+        snippet = get_relevant_snippet(processed_query, url, db_name=search_db)
+        ranked_documents[i].append(snippet) 
+
     return old_query, query, ranked_documents
 
 if __name__ == "__main__":
-    query = "Tübingen tubingen"
-    spellchecked_query = spellcheck(query)
-    print("Original Query: ", query)
-    print("Spellchecked Query: ", spellchecked_query)
+    # Example Usage:
+    query = "Expensive Restaurant"
 
     # Main retrieval function for UI
     old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=True, index_db="index_with_position.db", search_db="search.db")
+
     print("Old Query: ", old_query, " | Corrected Query: ", spellchecked_query)
+
     print("Ranked Documents:")
-    for doc_id, score, url, name, topics in ranked_documents:
-        print(f"Document ID: {doc_id}, URL: {url}, Score: {score}, Name: {name}, Topics: {topics}")
+    for doc_id, score, url, name, topics, snippet in ranked_documents:
+        print(f"Document ID: {doc_id}, URL: {url}, Score: {score}, Name: {name}, Topics: {topics}, Snippet: {snippet}")
+
+
+    ### Batching ###
 
     # Get results for query batch file
     batched_ranked_documents = retrieve_batched_queries("queries.txt", "index_with_position.db")
+
     # Write batch results to file
-    write_batch_results(batched_ranked_documents)
+    batch(batched_ranked_documents)
 
