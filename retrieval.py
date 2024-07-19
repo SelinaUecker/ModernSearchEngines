@@ -3,12 +3,15 @@ from collections import defaultdict
 from indexing import tokenize
 from operator import itemgetter
 import string
+from spellchecker import SpellChecker
+from tqdm import tqdm
 
 import nltk
 nltk.download('wordnet')
 nltk.download('stopwords')
 from nltk.corpus import wordnet, stopwords
 from transformers import pipeline
+import math
 
 from itertools import product
 
@@ -118,6 +121,8 @@ def query_processing(query):
     
     extended_query = ' '.join(extended_query)
     extended_query = remove_stopwords_and_punctuation(extended_query)
+    # Add tuebingen to the query to encourage Tübingen specific results
+    extended_query = extended_query + " tuebingen"
     print("Extended Query: ", extended_query)
     #tokens = tokenize(query)
     tokens = tokenize(extended_query, only_unique_tokens=True)
@@ -141,20 +146,26 @@ def calculate_proximity_score(proximity_lists):
     return 1/normalized_span if normalized_span > 0 else 0
 
 
-def rank_documents(index, tokenized_query, db_name='web_crawler.db'):
-    alpha = 0.7  # Weight for BM25 score and proximity score (1-alpha is the weight for proximity score)
+def rank_documents(index, tokenized_query, db_name='search.db'):
+    # Weight for BM25 score and proximity score (1-alpha is the weight for proximity score)
+    alpha = 0.7 
+    print("Ranking Documents...")
     doc_scores = defaultdict(lambda: [0, 0, []])  # [sum of BM25 scores, number of matching terms, positions]
-
-    for lemma, position in tokenized_query:
+    query_is_only_tuebingen = True if len(tokenized_query) == 1 and tokenized_query[0][0] == 'tuebingen' else False
+    for lemma, position in tqdm(tokenized_query):
         if lemma in index:
             doc_ids = index[lemma]
             for doc_id, (bm25_score, positions) in doc_ids.items():
-                doc_scores[doc_id][0] += bm25_score
+                # Rank Tübingen related documents higher
+                # bm25 score
+                doc_scores[doc_id][0] += 1000 if lemma == "tuebingen" and not query_is_only_tuebingen else bm25_score
+                # Counter for number of matching terms
                 doc_scores[doc_id][1] += 1
+                # Positions of query terms in document
                 doc_scores[doc_id][2].append(positions)
 
     # Calculate combined scores (sum of BM25 scores * number of matching terms)
-    combined_scores = {doc_id: score[0] * score[1] for doc_id, score in doc_scores.items()}
+    combined_scores = {doc_id: score[0] * math.log(1 + score[1]) for doc_id, score in doc_scores.items()}
 
     # Normalize combined scores
     if combined_scores:
@@ -178,18 +189,20 @@ def rank_documents(index, tokenized_query, db_name='web_crawler.db'):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
 
-    # Get URLs for the ranked documents
-    ranked_docs_with_urls = []
+    # Add URLs, Website Names, Topics of the ranked documents
+    ranked_docs_with_info = []
     for doc_id, score in ranked_docs:
         cursor.execute('SELECT url FROM pages WHERE ROWID = ?', (doc_id,))
-        url_row = cursor.fetchone()
-        if url_row:
-            url = url_row[0]
-            ranked_docs_with_urls.append((doc_id, score, url))
+        row = cursor.fetchone()
+        if row:
+            url = row[0]
+            name = row[1]
+            topics = row[3]
+            ranked_docs_with_info.append((doc_id, score, url, name, topics))
 
     conn.close()
 
-    return ranked_docs_with_urls
+    return ranked_docs_with_info
 
 def read_queries(query_batch_file="queries.txt"):
     queries = []
@@ -200,6 +213,7 @@ def read_queries(query_batch_file="queries.txt"):
     return queries
 
 def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with_position.db"):
+    print("Ranking documents for batch queries...")
     queries = read_queries(query_batch_file)
     results = []
     for query_number, query in queries:
@@ -211,37 +225,66 @@ def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with
 
     return results
 
-
-
-def batch(results, output_file='batch_results.txt'):
+def write_batch_results(results, output_file='batch_results.txt'):
+    print("Writing batch results to File")
     with open(output_file, 'w') as f:
-        for result_set in results:
+        for result_set in tqdm(results):
             query_number = result_set[0]
-            for rank, (doc_id, score, url) in enumerate(result_set[1][:100], start=1):
+            for rank, (doc_id, score, url, name, topics) in enumerate(result_set[1][:100], start=1):
                 f.write(f"{query_number}\t{rank}\t{url}\t{score:.3f}\n")
 
+def spellcheck(query):
+    spell_en = SpellChecker()
+    spell_ger = SpellChecker(language='de')
 
+    spell_en.word_frequency.load_words(["tübingen", "tuebingen"])
+    spell_ger.word_frequency.load_words(["tübingen", "tuebingen"])
+
+    corrected_query = []
+    
+    # Split the query into words
+    words = query.split()
+    
+    for word in words:
+        # Check if the word is misspelled
+        if word in spell_en:
+            corrected_query.append(word)
+        else:
+            # Get the most probable correction
+            corrected_word = spell_en.correction(word)
+            if not corrected_word:
+                corrected_word = spell_ger.correction(word)
+                if not corrected_word:
+                    corrected_word = word
+            corrected_query.append(corrected_word)
+    
+    # Join the corrected words back into a single string
+    return ' '.join(corrected_query)
+
+def main_retrival(query, need_spellcheck=True, index_db="index_with_position.db", search_db="search.db"):
+    old_query = query
+    if need_spellcheck:
+        query = spellcheck(query)
+    processed_query = query_processing(query)
+    index = get_relevant_lemmas(processed_query, db_name=index_db)
+    ranked_documents = rank_documents(index, processed_query, db_name=search_db)[:10]
+    return old_query, query, ranked_documents
 
 if __name__ == "__main__":
-    # Example query
-    example_query = "tübingen"
-    processed_query = query_processing(example_query)
-    print("Processed query: ", processed_query)
+    query = "Tübingen tubingen"
+    spellchecked_query = spellcheck(query)
+    print("Original Query: ", query)
+    print("Spellchecked Query: ", spellchecked_query)
 
-    # Get index with the relevant lemmas
-    index = get_relevant_lemmas(processed_query, db_name="index_with_position.db")
-
-    # Rank documents
-    ranked_documents = rank_documents(index, processed_query)[:10]
-
-    # Print results
+    # Main retrieval function for UI
+    old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=True, index_db="index_with_position.db", search_db="search.db")
+    print("Old Query: ", old_query, " | Corrected Query: ", spellchecked_query)
     print("Ranked Documents:")
     for doc_id, score, url in ranked_documents:
         print(f"Document ID: {doc_id}, URL: {url}, Score: {score}")
 
-
     # Get results for query batch file
     batched_ranked_documents = retrieve_batched_queries("queries.txt", "index_with_position.db")
     # Write batch results to file
-    batch(batched_ranked_documents)
+    write_batch_results(batched_ranked_documents)
 
