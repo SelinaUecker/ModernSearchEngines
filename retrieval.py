@@ -68,24 +68,34 @@ def get_synonyms_with_bert(word):
 
     # Context sentences
     context_sentences = [
-        f"The city of Tübingen is known for [MASK], which is a type of {word}.",
-        f"In Tübingen, many people look for [MASK], when they hear {word}.",
+        f"Tourists that look for {word} should search for the word [MASK] in their search engine.",
+        f"People that live in a historical university town that has a castle and is next a river, that look for {word} should search for the word [MASK] in their search engine.",
+        f"Tourists that are visiting a historical university town that has a castle and is next a river, that look for {word} should search for the word [MASK] in their search engine.",
+        f"People that look for {word} should search for the word [MASK] in their search engine.",
         f"In Tübingen, a [MASK] is a place where people can find {word}.",
-        f"In a dictionary, the word {word} is another word for [MASK].",
+        f"For tourists that are in a historical university town that has a castle and is next a river, a [MASK] is a place where people can find {word}.",
+        f"For people living in a historical university town that has a castle and is next a river, a [MASK] is a place where people can find {word}.",
         f"In a conversation about {word} the word [MASK] could come up.",
         f"The word [MASK] is a type of {word}.",
         f"{word} is or are a type of [MASK]."
     ]
-    
-    synonyms = set()
+
+    # Find synonyms
+    synonyms = dict()
     for sentence in context_sentences:
         results = fill_mask(sentence)
         #print(sentence, ": ")
         for result in results:
-            synonyms.add(result['token_str'].strip())
-           # print(f"\t{result['token_str'].strip()}")
-    
-    return synonyms
+            synonym = result['token_str'].strip()
+            #print(synonym)
+            if synonym not in synonyms:
+                synonyms[synonym] = 1
+            else:
+                synonyms[synonym] += 1
+
+    # Sort the synonyms in decreasing number of occurences 
+    results = list(item[0] for item in sorted(synonyms.items(), key=lambda s: s[1], reverse=True))
+    return results
 
 def remove_stopwords_and_punctuation(text):
     # Get English stopwords
@@ -116,8 +126,8 @@ def query_processing(query):
     for word in words:
         if word == "tübingen" or word == "tuebingen":
             continue
-        #synonyms = get_synonyms(word)
-        synonyms = get_synonyms_with_bert(word)
+        # Update query with the best synonyms found
+        synonyms = get_synonyms_with_bert(word)[:7]
         extended_query.update(synonyms)
     
     extended_query = ' '.join(extended_query)
