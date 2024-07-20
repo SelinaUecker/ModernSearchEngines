@@ -6,31 +6,35 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 from WebCrawler_basis import load_workdata, establish_workingDB
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
-def preprocess_text(data):
-	stopwords = set(nltk.corpus.stopwords.words('english'))
-	lemmatizer = nltk.stem.WordNetLemmatizer()
+def preprocess_text(data, stopwords, lemmatizer):
 	url, website, text, topics = data
 	tokens = nltk.word_tokenize(text)
 	tokens = [word for word in tokens if word.lower() not in stopwords and word.isalpha()]
 	tokens = [lemmatizer.lemmatize(word) for word in tokens]
 	return url, ' '.join(tokens)
 
+def preprocess_wrapper(data, stopwords, lemmatizer):
+    return preprocess_text(data, stopwords, lemmatizer)
+
 def create_topic_model(data):
 	# Tokenize and preprocess
 	nltk.download('punkt')
 	nltk.download('stopwords')
 	nltk.download('wordnet')
+	stopwords = set(nltk.corpus.stopwords.words('english'))
+	lemmatizer = nltk.stem.WordNetLemmatizer()
 	preprocessed_texts = {}
 	with ThreadPoolExecutor() as executor:
-		preprocessed_texts = list(executor.map(preprocess_text, data))
+		preprocessed_texts = list(executor.map(partial(preprocess_wrapper, arg1=stopwords, arg2=lemmatizer), data))
 
 	# Vectorization
-	tfidf_vectorizer = TfidfVectorizer(max_df=0.6, min_df=2, max_features=1000)
+	tfidf_vectorizer = TfidfVectorizer(max_df=0.6, min_df=3, max_features=1000)
 	tfidf_matrix = tfidf_vectorizer.fit_transform(preprocessed_texts.values())
 
 	# Model topics
-	num_topics = 12
+	num_topics = 11
 	lda_model = LatentDirichletAllocation(n_components=num_topics, random_state=42)
 	lda_model.fit(tfidf_matrix)
 
@@ -52,9 +56,11 @@ def assign_topics(data):
 	nltk.download('punkt')
 	nltk.download('stopwords')
 	nltk.download('wordnet')
+	stopwords = set(nltk.corpus.stopwords.words('english'))
+	lemmatizer = nltk.stem.WordNetLemmatizer()
 	preprocessed_texts = {}
 	with ThreadPoolExecutor() as executor:
-		preprocessed_texts = list(executor.map(preprocess_text, data))
+		preprocessed_texts = list(executor.map(partial(preprocess_wrapper, arg1=stopwords, arg2=lemmatizer), data))
 
 	# Vectorize
 	tfidf_matrix = tfidf_vectorizer.transform(preprocessed_texts.values())
@@ -108,7 +114,7 @@ def update_db(data):
 
 def prepare_topics():
 	# create working db from crawler db and load it
-	# establish_workingDB()
+	establish_workingDB()
 	data = load_workdata()
 
 	# create the topic model
@@ -171,4 +177,4 @@ if __name__ == "__main__":
 	print_topics()
 
 	# assign all topics and save in db
-	#model_topics()
+	model_topics()
