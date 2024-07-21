@@ -482,7 +482,7 @@ if __name__ == "__main__":
 		'https://www.thefork.com/restaurants/tubingen-c561333',
 		'https://www.tripadvisor.com/Attractions-g198539-Activities-c61-Tubingen_Baden_Wurttemberg.html',
 		'https://www.germany.travel/en/nature-outdoor-activities/overview.html',
-		'https://www.outdooractive.com/en/outdoor-activities-companies/germany/outdoor-activities-companies-in-germany/21857893/',
+		'https://www.outdooractive.com/en/travel-guide/germany/tuebingen/1015975/',
 		'https://www.my-stuwe.de/mensa/',
 		'https://www.tuepedia.de/wiki/Shedhalle',
 		'https://www.bahnhof.de/en/tuebingen-hbf',
@@ -496,7 +496,7 @@ if __name__ == "__main__":
 		"https://uni-tuebingen.de/en/"
 	]
 
-	#paralel_crawl(start_urls, 83500, 6, True)
+	paralel_crawl(start_urls, 100000, 6, True)
 	#check_Data()
 
-	establish_workingDB()
+	#establish_workingDB()
