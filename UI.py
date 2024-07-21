@@ -56,19 +56,22 @@ def update_results(new_query, topics, results):
     else:
         display_results(results)
 
+    # Scroll to the top of the results
+    canvas.yview_moveto(0)
+
 def display_results(results):
     for result in results:
         result_frame = tk.Frame(results_frame, bg="white", bd=0, relief="solid", padx=10, pady=5)
         result_frame.pack(fill=tk.X, pady=5)
 
-        title_label = tk.Label(result_frame, text=f"Name of site: {result['Name of site']}", bg="white", font=("Helvetica", 14, "bold"))
+        title_label = tk.Label(result_frame, text=result['Name of site'], bg="white", font=("Helvetica", 14, "bold"))
         title_label.pack(anchor="w")
 
-        url_label = tk.Label(result_frame, text=f"Url: {result['Url']}", bg="white", font=("Helvetica", 12), fg="blue", cursor="hand2")
+        url_label = tk.Label(result_frame, text=result['Url'], bg="white", font=("Helvetica", 12), fg="blue", cursor="hand2")
         url_label.pack(anchor="w")
-        url_label.bind("<Button-1>", lambda e, url=result['Url']: webbrowser.open(url))
+        url_label.bind("<Button-1>", lambda e, url=result['Url']: [webbrowser.open(url), canvas.yview_moveto(0)])
 
-        keywords_label = tk.Label(result_frame, text=f"Keywords: {result['Keywords']}", bg="white", font=("Helvetica", 12))
+        keywords_label = tk.Label(result_frame, text=result['Keywords'], bg="white", font=("Helvetica", 12))
         keywords_label.pack(anchor="w")
 
         toggle_label = tk.Label(result_frame, text="More", bg="white", font=("Helvetica", 12), fg="blue", cursor="hand2")
@@ -93,7 +96,7 @@ def display_corrected_query(old_query, new_query):
     corrected_label.bind("<Button-1>", lambda e: search_without_spellcheck(old_query))
 
 def start_ui(process_query_cb):
-    global root, entry, results_frame, process_query_callback, search_frame, corrected_label  # Ensure 'entry' and 'process_query_callback' are defined globally here
+    global root, entry, results_frame, process_query_callback, search_frame, corrected_label, canvas  # Ensure 'entry' and 'process_query_callback' are defined globally here
     process_query_callback = process_query_cb
 
     # Create the main window

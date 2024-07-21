@@ -69,14 +69,14 @@ def check_schema(db_name='inverted_index.db'):
     conn.close()
     return has_lemmas and has_documents and has_positions
 
-def get_corpus_from_db(db_name = 'web_crawler.db'):
+def get_corpus_from_db(db_name = 'search.db'):
     print("Gathering documents from DB...")
     # Connect to database
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
 
     # Fetch data
-    cursor.execute('SELECT rowid, * FROM pages WHERE relevant = 1')
+    cursor.execute('SELECT rowid, * FROM pages')
 
     corpus = cursor.fetchall() # [(id1, url1, document1), (id2, url2, document2)...]
 
@@ -194,7 +194,8 @@ class Index_with_position():
         self.avg_doc_len = 0
 
         print("Indexing documents...")
-        for doc_id, url, doc, relevant in tqdm(corpus):
+        for doc_id, url, name, doc, topics in tqdm(corpus):
+            # Filter out very long documents for efficency.
             if len(doc) > 2000000:
                 continue
             text = url_to_comma_separated_words(url) + " " + doc
@@ -253,7 +254,7 @@ class Index_with_position():
 
 # Example Usage
 if __name__ == "__main__":
-    corpus = get_corpus_from_db(db_name = 'web_crawler.db')[:5000]
+    corpus = get_corpus_from_db(db_name = 'search.db')[:5000]
     index = Index_with_position(corpus)
     index.save_to_db()
     

@@ -9,7 +9,7 @@ import pickle
 from simhash import Simhash
 from concurrent.futures import ThreadPoolExecutor
 import threading
-import time
+import tldextract
 
 def save_state(frontier, visited):
 	"""Save the state of the crawler to disk."""
@@ -166,7 +166,7 @@ def paralel_crawl(start_urls, stop_value, num_threads=1):
 	frontier, visited = load_state()
 	crawled = len(visited)
 
-	if not frontier:
+	if True: #not frontier:
 		frontier = deque(start_urls)
 
 	for i in range(num_threads):
@@ -272,6 +272,13 @@ def remove_duplicates(duplicates, pages):
 
 	return relevant_pages
 
+def add_website(page):
+	url, text = page
+	extracted = tldextract.extract(url)
+	website = extracted.domain
+	
+	return (url, website, text)
+
 def establish_workingDB():
 	# load all pages from the database of the crawler
 	conn1 = sqlite3.connect('web_crawler.db')
@@ -296,21 +303,26 @@ def establish_workingDB():
 	duplicates = detect_duplicates(hashes, 0.98)
 	relevant_pages = remove_duplicates(duplicates, language_relevant)
 
-	print(f"number of entries after processing: {len(relevant_pages)}")
+	final_data = []
+	with ThreadPoolExecutor() as executor:
+		final_data = list(executor.map(add_website, relevant_pages))
+
+	print(f"number of entries after processing: {len(final_data)}")
 	#create database to search on
 	conn = sqlite3.connect('search.db')
 	cursor = conn.cursor()
 	cursor.execute('''
 		CREATE TABLE IF NOT EXISTS pages (
 			url TEXT PRIMARY KEY,
+			website TEXT,
 			content TEXT,
 			topics TEXT
 		)
 	''')
 	conn.commit()
 
-	for url, text in relevant_pages:
-		cursor.execute('INSERT OR IGNORE INTO pages (url, content) VALUES (?, ?)', (url, text))
+	for url, website, text in final_data:
+		cursor.execute('INSERT OR IGNORE INTO pages (url, website, content) VALUES (?, ?, ?)', (url, website, text))
 		conn.commit()
 	
 	conn.close()
@@ -319,7 +331,7 @@ def load_workdata():
 	# load all pages from the search database
 	conn1 = sqlite3.connect('search.db')
 	cur1 = conn1.cursor()
-	cur1.execute('SELECT url, content, topics FROM pages')
+	cur1.execute('SELECT url, website, content, topics FROM pages')
 	rows = cur1.fetchall()
 	conn1.close()
 
@@ -393,15 +405,23 @@ def extend_crawl_list():
 if __name__ == "__main__":
 	init_db()
 	start_urls = [
-		"https://www.tuebingen.de/en/",
+		'https://health-nlp.com/people/carsten.html',
+        'https://allevents.in/tubingen/food-drinks',
+		'https://www.tripadvisor.com/Attractions-g198539-Activities-c36-Tubingen_Baden_Wurttemberg.html',
+		'https://www.my-stuwe.de/en/refectory/',
+		'https://www.tripadvisor.com/Attractions-g198539-Activities-Tubingen_Baden_Wurttemberg.html',
+		'https://velvetescape.com/things-to-do-in-tubingen/',
+		'https://justinpluslauren.com/things-to-do-in-tubingen-germany/',
+		#"https://www.tuebingen.de/en/",
 		"https://www.germany.travel/en/cities-culture/tuebingen.html",
-		"https://www.tuebingen-info.de/international-visitors.html",
+		#"https://www.tuebingen-info.de/international-visitors.html",
 		"https://en.wikipedia.org/wiki/T%C3%BCbingen",
-		"https://www.mygermanyvacation.com/best-things-to-do-and-see-in-tubingen-germany/",
-		"https://uni-tuebingen.de/en/"
+		#"https://uni-tuebingen.de/en/",
+		"https://www.mygermanyvacation.com/best-things-to-do-and-see-in-tubingen-germany/"
 	]
-	paralel_crawl(start_urls, 10000, 4)
+	paralel_crawl(start_urls, 20, 4)
 	check_Data()
 
 	# load data to work with
-	#data = load_workdata()
+	establish_workingDB()
+	data = load_workdata()

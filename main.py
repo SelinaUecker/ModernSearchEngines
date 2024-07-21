@@ -3,7 +3,7 @@ import threading
 from retrieval import main_retrival
 
 def fetch_and_display_results(query, use_spellcheck=True):
-    old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=use_spellcheck, index_db_name="index_with_position.db")
+    old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=use_spellcheck, index_db="index_with_position.db")
     
     if old_query.lower() != spellchecked_query.lower() and use_spellcheck:
         # If the query was corrected and spellcheck was used, prompt the user
@@ -14,12 +14,15 @@ def fetch_and_display_results(query, use_spellcheck=True):
 
     # Prepare results for the UI
     results = []
-    for i, (doc_id, score, url) in enumerate(ranked_documents):
+    for i, (doc_id, score, url, name, topics, snippet) in enumerate(ranked_documents):
+        if not isinstance(topics, list):
+            topics = [topics]  # Ensure topics is a list
+        topics = [topic for topic in topics if topic]  # Filter out NoneType values
         results.append({
-            "Name of site": f"Site {i + 1}",
+            "Name of site": name,
             "Url": url,
-            "Keywords": ', '.join(query.split()),  # Use the query keywords without unpacking
-            "Preview": f"Document ID: {doc_id}, Score: {score}"  # Placeholder preview
+            "Keywords": ', '.join(topics),  # Use the topics as keywords
+            "Preview": snippet  # Use the snippet from the retrieval results
         })
 
     # Update the UI with the results
