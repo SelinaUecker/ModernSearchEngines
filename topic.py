@@ -5,18 +5,12 @@ import json
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 from WebCrawler_basis import load_workdata, establish_workingDB
-from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 
-def preprocess_text(data, stopwords, lemmatizer):
-	url, website, text, topics = data
+def preprocess_text(text, stopwords, lemmatizer):
 	tokens = nltk.word_tokenize(text)
 	tokens = [word for word in tokens if word.lower() not in stopwords and word.isalpha()]
 	tokens = [lemmatizer.lemmatize(word) for word in tokens]
-	return url, ' '.join(tokens)
-
-def preprocess_wrapper(data, stopwords, lemmatizer):
-    return preprocess_text(data, stopwords, lemmatizer)
+	return ' '.join(tokens)
 
 def create_topic_model(data):
 	# Tokenize and preprocess
@@ -25,9 +19,7 @@ def create_topic_model(data):
 	nltk.download('wordnet')
 	stopwords = set(nltk.corpus.stopwords.words('english'))
 	lemmatizer = nltk.stem.WordNetLemmatizer()
-	preprocessed_texts = {}
-	with ThreadPoolExecutor() as executor:
-		preprocessed_texts = list(executor.map(partial(preprocess_wrapper, arg1=stopwords, arg2=lemmatizer), data))
+	preprocessed_texts = {url: preprocess_text(text, stopwords, lemmatizer) for url, webiste, text, topics in data}
 
 	# Vectorization
 	tfidf_vectorizer = TfidfVectorizer(max_df=0.6, min_df=3, max_features=1000)
@@ -58,9 +50,7 @@ def assign_topics(data):
 	nltk.download('wordnet')
 	stopwords = set(nltk.corpus.stopwords.words('english'))
 	lemmatizer = nltk.stem.WordNetLemmatizer()
-	preprocessed_texts = {}
-	with ThreadPoolExecutor() as executor:
-		preprocessed_texts = list(executor.map(partial(preprocess_wrapper, arg1=stopwords, arg2=lemmatizer), data))
+	preprocessed_texts = {url: preprocess_text(text, stopwords, lemmatizer) for url, webiste, text, topics in data}
 
 	# Vectorize
 	tfidf_matrix = tfidf_vectorizer.transform(preprocessed_texts.values())
@@ -128,29 +118,24 @@ def model_topics():
 
 	# replace topics with manually selected descripors for each topic
 	topic_descriptions = {
-	0: "Research",
-	1: "University",
-	2: "Biology",
-	3: "Education",
-	4: "Neuroscience",
-	5: "Other",
-	6: "Mathematics",
-	7: "Other",
-	8: "Psychology",
-	9: "Project",
-	10: "lab",
-	11: "German",
-	12: "articles",
-	13: "universitätsstadt",
-	14: "Event",
-	15: "Tübingen",
+	0: "clinical",
+	1: "event",
+	2: "University",
+	3: "articles",
+	4: "restaurants",
+	5: "journal",
+	6: "German",
+	7: "music",
+	8: "overview",
+	9: "knowledge",
+	10: "heritage",
 	}
 	data_with_descriptors = topics_to_descriptors(data_with_topics, topic_descriptions)
 
 	#update the database with the topics
 	update_db(data_with_descriptors)
 
-	for url, text, topics in data_with_descriptors[:100]:
+	for url, website, text, topics in data_with_descriptors[:100]:
 		print(f"Url: {url}  Topics: {topics}")
 
 def remove_image_and_pdf():

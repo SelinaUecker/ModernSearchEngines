@@ -212,11 +212,21 @@ def crawl(stop_value, use_ranking):
 				soup = BeautifulSoup(html_content, 'html.parser')
 				website_text = ' '.join(soup.stripped_strings).replace('\n', ' ')
 
+				#try to get language tag if not possible assume english
 				html_tag = soup.find('html')
-				lang = html_tag.get('lang', 'Not specified') if html_tag else 'Not specified'
+				lang = html_tag.get('lang', 'en') if html_tag else 'en'
 				english = lang.startswith('en')
+				
+				# get title and if not availabe use website name
+				if soup.title:
+					website = soup.title.string
+				else:
+					parsed_url = urlparse(fetched_url)
+					domain = parsed_url.netloc
+					if domain.startswith('www.'):
+						domain = domain[4:]
 
-				website = soup.title.string
+					website = domain
 
 				index_with_db(fetched_url, website, website_text, english)
 				
@@ -486,6 +496,7 @@ if __name__ == "__main__":
 		"https://uni-tuebingen.de/en/"
 	]
 
-	paralel_crawl(start_urls, 85000, 6, True)
+	#paralel_crawl(start_urls, 83500, 6, True)
 	#check_Data()
-	#establish_workingDB()
+
+	establish_workingDB()
