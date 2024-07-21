@@ -22,7 +22,7 @@ from heapq import heapify, heappop, heappush
 # Load a pre-trained model for fill-mask
 fill_mask = pipeline("fill-mask", model="bert-base-uncased")
 
-def get_relevant_lemmas(tokenized_query, db_name='inverted_index.db'):
+def get_relevant_lemmas(tokenized_query, db_name='index_with_position.db'):
     print("Collecting relevant index...")
     relevant_lemmas = defaultdict(lambda: defaultdict(lambda: [0, []]))
 
@@ -74,12 +74,12 @@ def get_synonyms_with_bert(word):
         f"The word [MASK] is a synonym for the word {word}.",
         f"The word [MASK] means the same as the word {word}.",
         f"Tourists that look for {word} should search for the word [MASK] in their search engine.",
-        f"People that live in a historical university town that has a castle and is next a river, that look for {word} should search for the word [MASK] in their search engine.",
-        f"Tourists that are visiting a historical university town that has a castle and is next a river, that look for {word} should search for the word [MASK] in their search engine.",
+        f"People, that look for {word} should search for the word [MASK] in their search engine.",
+        f"Tourists that are visiting a historical university town, that look for {word} should search for the word [MASK] in their search engine.",
         f"People that look for {word} should search for the word [MASK] in their search engine.",
         f"In Tübingen, a [MASK] is a place where people can find {word}.",
         f"For tourists that are in a historical university town that has a castle and is next a river, a [MASK] is a place where people can find {word}.",
-        f"For people living in a historical university town that has a castle and is next a river, a [MASK] is a place where people can find {word}.",
+        f"For people living in a historical university town, a [MASK] is a place where people can find {word}.",
         f"In a conversation about {word} the word [MASK] could come up.",
         f"The word [MASK] is a type of {word}.",
         f"{word} is or are a type of [MASK]."
@@ -377,7 +377,10 @@ def main_retrival(query, need_spellcheck=True, index_db="index_with_position.db"
     index = get_relevant_lemmas(tokenized_processed_query, db_name=index_db)
     ranked_documents = rank_documents(index, tokenized_processed_query, db_name=search_db)[:10]
     for i,  [doc_id, score, url, name, topics] in enumerate(ranked_documents):
-        snippet = get_relevant_snippet(processed_query, url, db_name=search_db)
+        relevant_query = ' '.join([word for word in processed_query.split() if word != "tuebingen"])
+        if len(relevant_query) == 0:
+            relevant_query = "tuebingen"
+        snippet = get_relevant_snippet(relevant_query, url, db_name=search_db)
         ranked_documents[i].append(snippet) 
 
     return old_query, query, ranked_documents
