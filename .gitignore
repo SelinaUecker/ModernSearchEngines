@@ -3,13 +3,12 @@ web_crawler.db
 crawler_state.pkl
 MSE_24_Group_Projects.ipynb
 index_with_position.db
-__pycache__/retrieval.cpython-310.pyc
-__pycache__/indexing.cpython-310.pyc
 batch_results.txt
 search.db
-/__pycache__
+./__pycache__
 index_with_position_old.db
 WebCrawler_basis_old.py
 index_with_position_old_version.db
 search_old.db
 search_old2.db
+*.pyc
