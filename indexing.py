@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import nltk
 from nltk.stem import PorterStemmer
 from tqdm import tqdm
+import json
 
 nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 stemmer = PorterStemmer()
@@ -23,13 +24,14 @@ def create_schema(db_name='index_with_position.db'):
             lemma TEXT UNIQUE
         )
     ''')
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Documents (
             id INTEGER PRIMARY KEY,
             doc_id INTEGER,
             bm25 REAL,
-            lemma_id INTEGER
+            lemma_id INTEGER,
+            FOREIGN KEY(lemma_id) REFERENCES Lemmas(id)
         )
     ''')
 
@@ -38,7 +40,7 @@ def create_schema(db_name='index_with_position.db'):
             id INTEGER PRIMARY KEY,
             doc_id INTEGER,
             lemma_id INTEGER,
-            position INTEGER,
+            positions TEXT,
             FOREIGN KEY(doc_id) REFERENCES Documents(id),
             FOREIGN KEY(lemma_id) REFERENCES Lemmas(id)
         )
@@ -47,7 +49,7 @@ def create_schema(db_name='index_with_position.db'):
     conn.commit()
     conn.close()
 
-def check_schema(db_name='inverted_index.db'):
+def check_schema(db_name='index_with_position.db'):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
 
@@ -138,6 +140,7 @@ def tokenize(text, only_unique_tokens=False):
         chunk = re.sub(r'(\d+),(\d+)', r'\1\2', chunk)
         chunk = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', chunk)
         chunk = re.sub(r'[\/\\_\-\–\+]+', ' ', chunk)
+        chunk = re.sub(r'(\b\w+)\.(\w+\b)', r'\1 \2', chunk)
         chunk = chunk.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
         chunk = re.sub(r'\s+', ' ', chunk).strip()
 
@@ -157,46 +160,38 @@ def tokenize(text, only_unique_tokens=False):
     return tokens
 
 
-def bm25(query, doc_id, num_documents , document_lengths, index, avg_doc_len):
+def bm25(doc_id, document_lengths, avg_doc_len, idf, lemma_freq_in_doc):
     k = 1.5 # controls rate of term saturation (increasing k diminishes the impact of term frequency)
     b = 0.75 # controls strength of document length normalization [0,1]
-    bm25_score = 0
 
-    for q in query:
-        num_docs_containg_q = len(index[q])
+    # Normalized document length
+    norm_doc_len = document_lengths[doc_id]/avg_doc_len
 
-        # Inverse Document Frequency
-        idf = math.log((num_documents - num_docs_containg_q + 0.5)/(num_docs_containg_q + 0.5) + 1)
-
-        # Number of occurences of query term in specific document with ID=doc_id
-        q_freq_in_doc = len(index[q][doc_id][1])
-
-        # Normalized document length
-        norm_doc_len = document_lengths[doc_id]/avg_doc_len
-
-        bm25_partial_score = idf * (q_freq_in_doc * (k+1)) / (q_freq_in_doc + k * (1-b + b * (norm_doc_len)))
-
-        bm25_score += bm25_partial_score
+    bm25_score = idf * (lemma_freq_in_doc * (k+1)) / (lemma_freq_in_doc + k * (1-b + b * (norm_doc_len)))
 
     return bm25_score
 
 class Index_with_position():
-    def __init__(self, corpus):
+    def __init__(self, corpus, db_name='index_with_position.db'):
 
         # Index is Dictionary with default value that has the following structure:
         # lemma: doc_id: [BM25, [positions where lemma occurs in document]]
         self.index = defaultdict(lambda: defaultdict(lambda: [0, []])) 
 
-
         self.document_lengths = {}
         self.corpus = corpus
         self.num_documents = len(corpus)
         self.avg_doc_len = 0
+        self.db_name = db_name
+
+        if os.path.exists(self.db_name):
+            print(f"You need to rename or delete existing Database: {db_name} before creating a new index.")
+            return
 
         print("Indexing documents...")
         for doc_id, url, name, doc, topics in tqdm(corpus):
             # Filter out very long documents for efficency.
-            if len(doc) > 2000000:
+            if len(doc) > 800000:
                 continue
             text = url_to_comma_separated_words(url) + " " + doc
             self.add_document(doc_id, text)
@@ -218,17 +213,29 @@ class Index_with_position():
 
     def add_bm25_scores(self):
         for lemma in self.index:
+            num_docs_containg_q = len(self.index[lemma])
+            # Inverse Document Frequency
+            idf = math.log((self.num_documents - num_docs_containg_q + 0.5)/(num_docs_containg_q + 0.5) + 1)
+            
             for doc_id in self.index[lemma]:
-                self.index[lemma][doc_id][0] = bm25([lemma], doc_id, self.num_documents, self.document_lengths, self.index, self.avg_doc_len)
+                # Number of occurences of query term in specific document with ID=doc_id
+                lemma_freq_in_doc = len(self.index[lemma][doc_id][1])
+                self.index[lemma][doc_id][0] = bm25(doc_id, self.document_lengths, self.avg_doc_len, idf, lemma_freq_in_doc)
 
-    def save_to_db(self, db_name='index_with_position.db'):
-        if not os.path.exists(db_name) or not check_schema(db_name):
-            create_schema(db_name)
-        conn = sqlite3.connect(db_name)
+    def save_to_db(self):
+        print(f"Saving to {self.db_name}...")
+        if os.path.exists(self.db_name):
+            print(f"You need to rename or delete existing Database: {self.db_name} before creating a new index.")
+            return
+        if not check_schema(self.db_name):
+            create_schema(self.db_name)
+        conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
 
         # Insert data
         for lemma, doc_dict in tqdm(self.index.items()):
+            if len(doc_dict) <= 5:
+                continue
             # Insert lemma
             cursor.execute('INSERT OR IGNORE INTO Lemmas (lemma) VALUES (?)', (lemma,))
             cursor.execute('SELECT id FROM Lemmas WHERE lemma = ?', (lemma,))
@@ -241,11 +248,11 @@ class Index_with_position():
                 cursor.execute('SELECT id FROM Documents WHERE doc_id = ?', (doc_id,))
                 document_db_id = cursor.fetchone()[0]
 
-                # Insert positions
-                for position in positions:
-                    cursor.execute('INSERT INTO Positions (doc_id, lemma_id, position) VALUES (?, ?, ?)', 
-                                (document_db_id, lemma_id, position))
-                    
+                # Serialize positions as a JSON string
+                positions_json = json.dumps(positions)
+                cursor.execute('INSERT INTO Positions (doc_id, lemma_id, positions) VALUES (?, ?, ?)', 
+                            (document_db_id, lemma_id, positions_json))
+                        
         conn.commit()
         conn.close()
 
@@ -254,8 +261,8 @@ class Index_with_position():
 
 # Example Usage
 if __name__ == "__main__":
-    corpus = get_corpus_from_db(db_name = 'search.db')[:5000]
-    index = Index_with_position(corpus)
+    corpus = get_corpus_from_db(db_name='search.db')
+    index = Index_with_position(corpus, db_name='index_with_position.db')
     index.save_to_db()
     
     

@@ -5,6 +5,7 @@ from operator import itemgetter
 import string
 from spellchecker import SpellChecker
 from tqdm import tqdm
+import json
 
 import nltk
 from nltk.corpus import stopwords
@@ -40,19 +41,20 @@ def get_relevant_lemmas(tokenized_query, db_name='index_with_position.db'):
 
             # Get documents and positions for this lemma
             cursor.execute('''
-                SELECT d.doc_id, d.bm25, p.position 
+                SELECT d.doc_id, d.bm25, p.positions 
                 FROM Documents d
                 JOIN Positions p ON d.doc_id = p.doc_id
                 WHERE d.lemma_id = ? AND p.lemma_id = ?
             ''', (lemma_id, lemma_id))
             
             rows = cursor.fetchall()
-            for doc_id, bm25, position in rows:
+            for doc_id, bm25, positions_json in rows:
+                positions = json.loads(positions_json)
                 relevant_lemmas[lemma][doc_id][0] = bm25
-                relevant_lemmas[lemma][doc_id][1].append(position)
+                relevant_lemmas[lemma][doc_id][1].extend(positions)
                 bm25_scores.append(bm25)
 
-     # Normalize BM25 scores
+    # Normalize BM25 scores
     if bm25_scores:
         bm25_min = min(bm25_scores)
         bm25_max = max(bm25_scores)
@@ -220,14 +222,14 @@ def rank_documents(index, tokenized_query, db_name='search.db', alpha=0.7 ):
             doc_ids = index[lemma]
             for doc_id, (bm25_score, positions) in doc_ids.items():
                 # Add BM25 score, but rank Tübingen related documents higher
-                doc_scores[doc_id][0] += 1000 if lemma == "tuebingen" and not query_is_only_tuebingen else bm25_score
+                doc_scores[doc_id][0] += 60 + 20*bm25_score  if lemma == "tuebingen" and not query_is_only_tuebingen else bm25_score
                 # Counter for number of matching terms
                 doc_scores[doc_id][1] += 1
                 # Positions of query terms in document
                 doc_scores[doc_id][2].append(positions)
 
     # Calculate combined scores (sum of BM25 scores * number of matching terms)
-    combined_scores = {doc_id: score[0] * math.log(1 + score[1]) for doc_id, score in doc_scores.items()}
+    combined_scores = {doc_id: score[0] for doc_id, score in doc_scores.items()}
 
     # Normalize combined scores
     normalized_combined_scores = normalize_scores(combined_scores)
@@ -272,18 +274,25 @@ def read_queries(query_batch_file="queries.txt"):
             queries.append((int(query_number), query_text))
     return queries
 
+
 def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with_position.db"):
+
     print("Ranking documents for batch queries...")
+
     queries = read_queries(query_batch_file)
     results = []
+
     for query_number, query in queries:
         tokenized_processed_query, processed_query = query_processing(query)
+
         #print("Processed query: ", processed_query)
+
         index = get_relevant_lemmas(tokenized_processed_query, db_name)
         ranked_documents = rank_documents(index, tokenized_processed_query)
         results.append((query_number, ranked_documents))
 
     return results
+
 
 def batch(results, output_file='batch_results.txt'):
     print("Writing batch results to File")

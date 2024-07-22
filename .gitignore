@@ -10,3 +10,6 @@ search.db
 /__pycache__
 index_with_position_old.db
 WebCrawler_basis_old.py
+index_with_position_old_version.db
+search_old.db
+search_old2.db
