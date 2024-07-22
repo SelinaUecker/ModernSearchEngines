@@ -419,7 +419,7 @@ if __name__ == "__main__":
 		#"https://uni-tuebingen.de/en/",
 		"https://www.mygermanyvacation.com/best-things-to-do-and-see-in-tubingen-germany/"
 	]
-	paralel_crawl(start_urls, 20, 4)
+	paralel_crawl(start_urls, 50000, 4)
 	check_Data()
 
 	# load data to work with
