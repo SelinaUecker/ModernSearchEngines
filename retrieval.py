@@ -22,6 +22,7 @@ from heapq import heapify, heappop, heappush
 
 # Load a pre-trained model for fill-mask
 fill_mask = pipeline("fill-mask", model="bert-base-uncased")
+tuebingen_terms = ["tuebingen", "tuebing", "hohentuebingen", "waldhaeus", "oesterberg", "derendingen", "derending", "lustnau", "lustnauer", "pfrondorf"]
 
 def get_relevant_lemmas(tokenized_query, db_name='index_with_position.db'):
     print("Collecting relevant index...")
@@ -87,7 +88,7 @@ def get_synonyms_with_bert(word):
         f"{word} is or are a type of [MASK]."
     ]
     # Synonyms that are filtered out.
-    filtered_synonyms = {"fuck", "hotel", "bad", "god", "love"}
+    filtered_synonyms = {"word", "words", "fuck", "hotel", "bad", "god", "love"}
     # Only the first 2 prompts are used for these words
     partially_filtered_words = {"expensive", "inexpensive", "cheap", "luxurious", "luxury", "rare", "unique", "special"}
     # Find synonyms
@@ -147,16 +148,17 @@ def query_processing(query):
     query = remove_stopwords_and_punctuation(query)
     print("Preprocessed Query: ", query)
     words = query.split()
-    words.append("tuebingen")
+    original_len = len(words)
+    words += tuebingen_terms
     extended_query = set(words)
-    num_of_synonyms_per_query_term = max(0, 6 - len(words))
-    filtered_words = {"tübingen", "tuebingen", "good", "nice", "okay", "sensible", "popular", "frequented", "recommend", "recommended", "competent", "renowned", "bad", "unpleasant", 
+    num_of_synonyms_per_query_term = max(0, 8 - original_len)
+    filtered_words = {"tübingen", "good", "nice", "okay", "sensible", "popular", "frequented", "recommend", "recommended", "competent", "renowned", "bad", "unpleasant", 
                       "pleasant"}
 
     # Add synonyms to query
     if num_of_synonyms_per_query_term > 0:
         for word in words:
-            if word in filtered_words:
+            if word in filtered_words or word in tuebingen_terms:
                 continue
             # Update query with the best synonyms found
             synonyms = get_synonyms_with_bert(word)[:num_of_synonyms_per_query_term]
@@ -166,9 +168,10 @@ def query_processing(query):
     extended_query = remove_stopwords_and_punctuation(extended_query)
     # Add tuebingen to the query to encourage Tübingen specific results
     print("Extended Query: ", extended_query)
-    #tokens = tokenize(query)
     tokens = tokenize(extended_query, only_unique_tokens=True)
-    return tokens, extended_query
+    original_query = [token[0] for token in tokenize(query, only_unique_tokens=True)]
+
+    return tokens, extended_query, original_query
 
 def calculate_proximity_score(proximity_lists):
     # Return 0 if there is only one term (avoid division by zero)
@@ -211,25 +214,48 @@ def normalize_scores(scores):
         return {doc_id: 0.0 for doc_id in scores}  # Avoid division by zero if all scores are the same
     return {doc_id: (score - min_score) / (max_score - min_score) for doc_id, score in scores.items()}
 
-def rank_documents(index, tokenized_query, db_name='search.db', alpha=0.7 ):
+def rank_documents(index, tokenized_query, original_query, db_name='search.db', alpha=0.8):
     # alpha: Weight for BM25 score and proximity score (1-alpha is the weight for proximity score)
 
     print("Ranking Documents...")
     doc_scores = defaultdict(lambda: [0, 0, []])  # [sum of BM25 scores, number of matching terms, positions]
     query_is_only_tuebingen = True if len(tokenized_query) == 1 and tokenized_query[0][0] == 'tuebingen' else False
+    include_tuebingen = set()
     for lemma, position in tqdm(tokenized_query):
         if lemma in index:
             doc_ids = index[lemma]
             for doc_id, (bm25_score, positions) in doc_ids.items():
-                # Add BM25 score, but rank Tübingen related documents higher
-                doc_scores[doc_id][0] += 60 + 20*bm25_score  if lemma == "tuebingen" and not query_is_only_tuebingen else bm25_score
-                # Counter for number of matching terms
-                doc_scores[doc_id][1] += 1
-                # Positions of query terms in document
-                doc_scores[doc_id][2].append(positions)
+                # Check if doc includes Tuebingen related term
+                if lemma in tuebingen_terms and lemma != "germany" and lemma != "baden" and lemma != "wuerttemberg":
+                    include_tuebingen.update({doc_id})
+                
+                if lemma in original_query:
+                    # Positions of query terms in document
+                    doc_scores[doc_id][2].append(positions)
+                
+                    if lemma in tuebingen_terms:
+                        doc_scores[doc_id][0] += 1*bm25_score
+                        # Counter for number of matching terms
+                        doc_scores[doc_id][1] += 1
+                    else:
+                        doc_scores[doc_id][0] += 4*bm25_score
+                        doc_scores[doc_id][1] += 2
+                else:
+                    if lemma in tuebingen_terms:
+                        doc_scores[doc_id][0] += 0.2*bm25_score
+                        # Counter for number of matching terms
+                        doc_scores[doc_id][1] += 0.2
+                    else:
+                        doc_scores[doc_id][0] += 2*bm25_score
+                        doc_scores[doc_id][1] += 2
+
+                
+    # Rank documents that are related to Tübingen higher
+    for doc_id in include_tuebingen:
+        doc_scores[doc_id][0] += 100
 
     # Calculate combined scores (sum of BM25 scores * number of matching terms)
-    combined_scores = {doc_id: score[0] for doc_id, score in doc_scores.items()}
+    combined_scores = {doc_id: score[0] * math.log1p(score[1]) for doc_id, score in doc_scores.items()}
 
     # Normalize combined scores
     normalized_combined_scores = normalize_scores(combined_scores)
@@ -283,12 +309,12 @@ def retrieve_batched_queries(query_batch_file="queries.txt", db_name="index_with
     results = []
 
     for query_number, query in queries:
-        tokenized_processed_query, processed_query = query_processing(query)
+        tokenized_processed_query, processed_query, original_query = query_processing(query)
 
         #print("Processed query: ", processed_query)
 
         index = get_relevant_lemmas(tokenized_processed_query, db_name)
-        ranked_documents = rank_documents(index, tokenized_processed_query)
+        ranked_documents = rank_documents(index, tokenized_processed_query, original_query)
         results.append((query_number, ranked_documents))
 
     return results
@@ -382,9 +408,9 @@ def main_retrival(query, need_spellcheck=True, index_db="index_with_position.db"
     if need_spellcheck:
         query = spellcheck(query)
 
-    tokenized_processed_query, processed_query = query_processing(query)
+    tokenized_processed_query, processed_query, original_query = query_processing(query)
     index = get_relevant_lemmas(tokenized_processed_query, db_name=index_db)
-    ranked_documents = rank_documents(index, tokenized_processed_query, db_name=search_db)[:10]
+    ranked_documents = rank_documents(index, tokenized_processed_query, original_query, db_name=search_db)[:10]
     for i,  [doc_id, score, url, name, topics] in enumerate(ranked_documents):
         relevant_query = ' '.join([word for word in processed_query.split() if word != "tuebingen"])
         if len(relevant_query) == 0:
@@ -396,17 +422,16 @@ def main_retrival(query, need_spellcheck=True, index_db="index_with_position.db"
 
 if __name__ == "__main__":
     # Example Usage:
-    query = "Expensive Restaurant"
+    #query = "Expensive Restaurant"
 
     # Main retrieval function for UI
-    old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=True, index_db="index_with_position.db", search_db="search.db")
+    #old_query, spellchecked_query, ranked_documents = main_retrival(query, need_spellcheck=True, index_db="index_with_position.db", search_db="search.db")
 
-    print("Old Query: ", old_query, " | Corrected Query: ", spellchecked_query)
+    #print("Old Query: ", old_query, " | Corrected Query: ", spellchecked_query)
 
-    print("Ranked Documents:")
-    for doc_id, score, url, name, topics, snippet in ranked_documents:
-        print(f"Document ID: {doc_id}, URL: {url}, Score: {score}, Name: {name}, Topics: {topics}, Snippet: {snippet}")
-
+    #print("Ranked Documents:")
+    #for doc_id, score, url, name, topics, snippet in ranked_documents:
+    #    print(f"Document ID: {doc_id}, URL: {url}, Score: {score}, Name: {name}, Topics: {topics}, Snippet: {snippet}")
 
     ### Batching ###
 
