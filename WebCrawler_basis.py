@@ -9,7 +9,6 @@ import pickle
 from simhash import Simhash
 from concurrent.futures import ThreadPoolExecutor
 import threading
-import tldextract
 
 def save_state(frontier, visited, name="crawler_state.pkl"):
 	"""Save the state of the crawler to disk."""
@@ -82,17 +81,18 @@ def index_with_db(url, website, pure_text, relevant):
 	conn.close()
 
 
-def check_keywords(url, keyword):
-	pattern = '|'.join(keyword)
+def check_keywords(url, keywords):
+	"""Returns if the url contains any of the specified keywords"""
+	pattern = '|'.join(keywords)
 	return bool(re.search(pattern, url))
 
-# assign priorities to crawl
 def priority(url):
+	"""return the crawling priority of an url based on if it suggests to be english and regarding tübingen"""
 	# Check if the url suggests the site to be in English
 	english_keywords = ['(^|/)en\.', 'english', '(^|/)us\.', '(^|/)uk\.', '(^|/)cad\.', '/en/']
 	english = check_keywords(url, english_keywords)
 	
-	# Define certain words you want to prioritize in the URL
+	# Check if the url suggests the site to be about Tübingen
 	priority_keywords = {"tuebingen", "tübingen", "T%C3%BCbingen", "tubingen"}
 	contains_keyword = check_keywords(url, priority_keywords)
 	
@@ -104,8 +104,9 @@ def priority(url):
 	else:
 		return 3  # Low priority
 	
-# Single-threaded Crawling
 def single_crawl(start_urls, stop_value):
+	"""First single threaded crawler. Loads its previous state if possible to contiue that crawl, if not starts with the given start_urls. 
+	Crawls until the specified number of websites were visited"""
 	frontier, visited = load_state()
 	crawled = len(visited)
 
@@ -149,7 +150,7 @@ def single_crawl(start_urls, stop_value):
 		except Exception:
 			print(f"Could not crawl website: {current_url}")
 
-# Multi-threaded crawling
+# Multi-threaded crawling preparation
 frontier_lock = threading.Lock()
 visited_lock = threading.Lock()
 crawled_lock = threading.Lock()
@@ -158,6 +159,8 @@ frontier = []
 visited = []
 
 def paralel_crawl(start_urls, stop_value, num_threads=1, use_ranking=True):
+	"""Multi threaded crawler. Loads its previous state if possible to contiue that crawl, if not starts with the given start_urls. 
+	Starts the specified number of threads to use for crawling."""
 	global crawled
 	global frontier
 	global visited
@@ -178,12 +181,15 @@ def paralel_crawl(start_urls, stop_value, num_threads=1, use_ranking=True):
 		thread.join()
 
 def crawl(stop_value, use_ranking):
+	"""Function for each thread of the mutli threaded crawler. Crawls until the specified number of websites were visited and uses the priority function to decide
+	what to crawl when if so desired."""
 	global crawled
 	global frontier
 	global visited
 	while True:
 		with crawled_lock:
 			with frontier_lock:
+				# stop when number of websites to crawl is reached
 				if not frontier or crawled >= stop_value:
 					break
 				
@@ -197,18 +203,21 @@ def crawl(stop_value, use_ranking):
 		try:
 			print(f"Crawling Nr {crawled}: {current_url}")
 
+			# check if we can crawl the url
 			with visited_lock:
 				if current_url in visited or not can_fetch(current_url):
 					continue
 				visited.add(current_url)
 
-			#skip images and pdf
+			# skip images and pdf
 			if current_url.endswith('.jpg') or current_url.endswith('.png') or current_url.endswith('.pdf'):
 				continue
-
+			
+			# get content of the url
 			html_content, fetched_url = fetch_page(current_url)
 
 			if fetched_url:
+				# parse website text
 				soup = BeautifulSoup(html_content, 'html.parser')
 				website_text = ' '.join(soup.stripped_strings).replace('\n', ' ')
 
@@ -228,10 +237,12 @@ def crawl(stop_value, use_ranking):
 
 					website = domain
 
+				# save in the database
 				index_with_db(fetched_url, website, website_text, english)
-				
+				# get all new links on the website
 				links = parse_links(soup, fetched_url)
 
+				# add all links to frontier if not already in frontier or already visited
 				for link in links:
 					with visited_lock:
 						if link not in visited and link not in frontier:
@@ -246,8 +257,8 @@ def crawl(stop_value, use_ranking):
 				with frontier_lock:
 					save_state(frontier, visited)
 
-# process crawled data
 def is_language_relevant(page):
+	"""helper to return if we saved the website as english"""
 	url, website, text, english = page
 	try:
 		if english:
@@ -256,15 +267,17 @@ def is_language_relevant(page):
 		print(f"could not check {url}")
 
 def calc_symhash(page):
+	"""Returns the touple of url and the Simhash of the text of the website at that url"""
 	url, website, text = page
 	symhash = Simhash(text).value
 	return (url, str(symhash))	
 
 def hamming_distance(x, y):
+	"""calculates how different the simhashes x and y are with the hamming distance. lower numbers meening more similarity"""
 	return bin(x ^ y).count('1')
 
 def detect_duplicates(hashes, threshold):
-	# Compare each pair of hashes
+	"""compares all Simhashes to each other and returns a list of all combinations of similar items as items of 2 urls if their similariy is greater than the threshold"""
 	similar_pages = []
 	for i in range(len(hashes)):
 		url1, hash1 = hashes[i]
@@ -280,12 +293,13 @@ def detect_duplicates(hashes, threshold):
 	return similar_pages
 
 def remove_duplicates(duplicates, pages):
+	"""takes a list of duolicaes and the original data and returns a list with no dupicates"""
 	relevant_pages = []
 	pages_to_discard = []
 
 	for url1, url2 in duplicates:
 		if url1 not in pages_to_discard and url2 not in pages_to_discard:
-			# if neither of the pages are already discarded, discard the second
+			# if neither of the pages are already discarded, discard the second page
 			pages_to_discard.append(url2)
 	
 	for url, website, text in pages:
@@ -295,6 +309,8 @@ def remove_duplicates(duplicates, pages):
 	return relevant_pages
 
 def establish_workingDB():
+	"""Creates a search.db from the crawler db that only contains english items and no duplicates"""
+
 	# load all pages from the database of the crawler
 	conn1 = sqlite3.connect('web_crawler.db')
 	cur1 = conn1.cursor()
@@ -312,7 +328,7 @@ def establish_workingDB():
 
 	language_relevant = [item for item in language_relevant if item is not None]
 
-	print("calculating hashes of websites")
+	print("calculating Simhashes of websites")
 	hashes = []
 	with ThreadPoolExecutor() as executor:
 		hashes = list(executor.map(calc_symhash, language_relevant))
@@ -324,6 +340,7 @@ def establish_workingDB():
 	relevant_pages = remove_duplicates(duplicates, language_relevant)
 
 	print(f"number of entries after processing: {len(relevant_pages)}")
+
 	#create database to search on
 	conn = sqlite3.connect('search.db')
 	cursor = conn.cursor()
@@ -337,6 +354,7 @@ def establish_workingDB():
 	''')
 	conn.commit()
 
+	# insert items into db
 	for url, website, text in relevant_pages:
 		cursor.execute('INSERT OR IGNORE INTO pages (url, website, content) VALUES (?, ?, ?)', (url, website, text))
 		conn.commit()
@@ -344,7 +362,8 @@ def establish_workingDB():
 	conn.close()
 
 def load_workdata():
-	# load all pages from the search database
+	"""loads all items from the search db and returns them"""
+
 	conn1 = sqlite3.connect('search.db')
 	cur1 = conn1.cursor()
 	cur1.execute('SELECT url, website, content, topics FROM pages')
@@ -354,6 +373,8 @@ def load_workdata():
 	return rows
 
 def check_Data():
+	"""Helper function to check the english content of the webcralwer db as well as its distribution of websites"""
+
 	conn1 = sqlite3.connect('web_crawler.db')
 	cur1 = conn1.cursor()
 	cur1.execute('SELECT url, website, content, relevant FROM pages')
@@ -364,7 +385,7 @@ def check_Data():
 	websites= {}
 
 	for item in rows:
-		url, text ,english = item
+		url, website, text, english = item
 
 		if english:
 			englishItems += 1
@@ -381,6 +402,8 @@ def check_Data():
 	print(websites)
 
 def filter_crawl_data(frontier, to_filter):
+	"""Helper function to filter out urls from the frontier that contain certain strongs like .jpg etc."""
+
 	new_frontier = []
 
 	with open('crawler_old_state.pkl', 'wb') as f:
@@ -393,6 +416,8 @@ def filter_crawl_data(frontier, to_filter):
 	return new_frontier
 
 def extend_crawl_list():
+	"""Helper function to add english websites to the frontier by modifying the german websites in the frontier and visited through replacing /de/ with /en/"""
+
 	frontier, visited = load_state()
 	frontier = list(frontier)
 	to_append = set()
@@ -499,4 +524,4 @@ if __name__ == "__main__":
 	paralel_crawl(start_urls, 100000, 6, True)
 	#check_Data()
 
-	#establish_workingDB()
+	establish_workingDB()
