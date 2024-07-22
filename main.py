@@ -16,13 +16,13 @@ def fetch_and_display_results(query, use_spellcheck=True):
     results = []
     for i, (doc_id, score, url, name, topics, snippet) in enumerate(ranked_documents):
         if not isinstance(topics, list):
-            topics = [topics]  # Ensure topics is a list
-        topics = [topic for topic in topics if topic]  # Filter out NoneType values
+            topics = [topics]  
+        topics = [topic for topic in topics if topic]  
         results.append({
             "Name of site": name,
             "Url": url,
-            "Keywords": ', '.join(topics),  # Use the topics as keywords
-            "Preview": snippet  # Use the snippet from the retrieval results
+            "Keywords": ', '.join(topics),  
+            "Preview": snippet  
         })
 
     # Update the UI with the results
