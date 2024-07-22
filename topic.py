@@ -2,36 +2,34 @@ import nltk
 import pickle
 import sqlite3
 import json
-import nltk.stem.wordnet
-from nltk.corpus import stopwords
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 from WebCrawler_basis import load_workdata, establish_workingDB
-from concurrent.futures import ThreadPoolExecutor
 
-nltk.download('wordnet')
-nltk.download('punkt')
-nltk.download('stopwords')
-lemmatizer = nltk.stem.WordNetLemmatizer()
-
-def preprocess_text(data):
-	stopwords_set = set(stopwords.words('english'))
-	url, website, text, topics = data
+def preprocess_text(text, stopwords, lemmatizer):
+	"""Preprocess then returns the given text by removing given stopwords and using a lematizer"""
 	tokens = nltk.word_tokenize(text)
-	tokens = [word for word in tokens if word.lower() not in stopwords_set and word.isalpha()]
+	tokens = [word for word in tokens if word.lower() not in stopwords and word.isalpha()]
 	tokens = [lemmatizer.lemmatize(word) for word in tokens]
-	return url, ' '.join(tokens)
+	return ' '.join(tokens)
 
 def create_topic_model(data):
+	"""creates a topic model based on the given data and then saves it to the file system"""
+
 	# Tokenize and preprocess
-	preprocessed_texts = {preprocess_text(item)[0]: preprocess_text(item)[1] for item in data}
+	nltk.download('punkt')
+	nltk.download('stopwords')
+	nltk.download('wordnet')
+	stopwords = set(nltk.corpus.stopwords.words('english'))
+	lemmatizer = nltk.stem.WordNetLemmatizer()
+	preprocessed_texts = {url: preprocess_text(text, stopwords, lemmatizer) for url, webiste, text, topics in data}
 
 	# Vectorization
-	tfidf_vectorizer = TfidfVectorizer(max_df=0.6, min_df=2, max_features=1000)
+	tfidf_vectorizer = TfidfVectorizer(max_df=0.6, min_df=3, max_features=1000)
 	tfidf_matrix = tfidf_vectorizer.fit_transform(preprocessed_texts.values())
 
 	# Model topics
-	num_topics = 12
+	num_topics = 11
 	lda_model = LatentDirichletAllocation(n_components=num_topics, random_state=42)
 	lda_model.fit(tfidf_matrix)
 
@@ -41,24 +39,34 @@ def create_topic_model(data):
 		pickle.dump(tfidf_vectorizer, vectorizer_file)
 
 def load_topic_model():
+	"""Loeads the created topic model from the file system for use"""
+
 	with open('lda_model.pkl', 'rb') as model_file, open('tfidf_vectorizer.pkl', 'rb') as vectorizer_file:
 		lda_model = pickle.load(model_file)
 		tfidf_vectorizer = pickle.load(vectorizer_file)
 	return lda_model, tfidf_vectorizer
 
 def assign_topics(data):
+	"""Assigns the top 3 matching topics to each website in the data using the created topic model"""
+
 	lda_model, tfidf_vectorizer = load_topic_model()
 
 	# Tokenize and preprocess
-	preprocessed_texts = {preprocess_text(item)[0]: preprocess_text(item)[1] for item in data}
+	nltk.download('punkt')
+	nltk.download('stopwords')
+	nltk.download('wordnet')
+	stopwords = set(nltk.corpus.stopwords.words('english'))
+	lemmatizer = nltk.stem.WordNetLemmatizer()
+	preprocessed_texts = {url: preprocess_text(text, stopwords, lemmatizer) for url, webiste, text, topics in data}
 
-    # Vectorize
+	# Vectorize
 	tfidf_matrix = tfidf_vectorizer.transform(preprocessed_texts.values())
 
 	# Get topics
 	topic_distributions = lda_model.transform(tfidf_matrix)
 	top_topics = [(-topic_dist).argsort()[:3].tolist() for topic_dist in topic_distributions]
 
+	# assign topics
 	result = []
 	for i, (url, website, text, topics) in enumerate(data):
 		result.append((url, website, text, top_topics[i]))
@@ -66,6 +74,8 @@ def assign_topics(data):
 	return result
 
 def topics_to_descriptors(data, descriptors):
+	"""replaces for humans useless topic ids with usfull manually chosen topic descriptors"""
+
 	docs_with_descriptors = []
 
 	for url, website, document, topics in data:
@@ -75,6 +85,8 @@ def topics_to_descriptors(data, descriptors):
 	return docs_with_descriptors
 
 def print_topics(num_words=15):
+	"""Prints the top words for each topic"""
+
 	lda_model, tfidf_vectorizer = load_topic_model()
 	feature_names = tfidf_vectorizer.get_feature_names_out()
     
@@ -94,6 +106,8 @@ def print_topics(num_words=15):
 		print()
 
 def update_db(data):
+	"""Adds the topic desctiptors to their respective websites in the database"""
+
 	conn = sqlite3.connect('search.db')
 	cursor = conn.cursor()
 	for url, website, text, topics in data:
@@ -103,64 +117,54 @@ def update_db(data):
 	conn.close()
 
 def prepare_topics():
+	"""Funtcion to call all needed functions to create a topic model if a webcrawler database exists"""
+
 	# create working db from crawler db and load it
-	# establish_workingDB()
+	establish_workingDB()
 	data = load_workdata()
 
 	# create the topic model
 	create_topic_model(data)
 
 def model_topics():
+	"""Funtcion to call all needed functions to use the created topic model to asign each element in the search db its topics"""
+
 	# load data from db
 	data = load_workdata()
 	# assign top 3 topics to each document
 	data_with_topics = assign_topics(data)
 
-	# replace topics with manually selected descripors for each topic
+	# manually selected descripors for each topic
 	topic_descriptions = {
-	0: "Research",
-	1: "University",
-	2: "Biology",
-	3: "Education",
-	4: "Neuroscience",
-	5: "Other",
-	6: "Mathematics",
-	7: "Food",
-	8: "Psychology",
-	9: "Project",
-	10: "lab",
-	11: "German",
-	12: "articles",
-	13: "universitätsstadt",
-	14: "Event",
-	15: "Tübingen",
-	16: "Tourism",
-	17: "Entertainment",
-	18: "Beauty",
-	19: "Sport",
-	20: "Drinks",
-	21: "Nature",
-	22: "History",
-	23: "Politics",
-	24: "Service",
-	25: "Retail"
+	0: "clinical",
+	1: "event",
+	2: "University",
+	3: "articles",
+	4: "restaurants",
+	5: "journal",
+	6: "German",
+	7: "music",
+	8: "overview",
+	9: "knowledge",
+	10: "heritage",
 	}
 	data_with_descriptors = topics_to_descriptors(data_with_topics, topic_descriptions)
 
-	#update the database with the topics
+	# update the database with the topics
 	update_db(data_with_descriptors)
 
-	for url, website, text, topics in data_with_descriptors[:100]:
-		print(f"Url: {url}  Topics: {topics}")
-
 def remove_image_and_pdf():
+	"""Helper function to remove all images and pdfs from the database that were included at the start"""
+
 	# load all pages from the database of the crawler
 	conn = sqlite3.connect('web_crawler.db')
 	cursor = conn.cursor()
 	cursor.execute('SELECT url, content, relevant FROM pages')
 	rows = cursor.fetchall()
+
 	items = 0
 	for url, text, english in rows:
+		# delete item if the url ends with the decriptors for an image or pdf
 		if url.endswith('.jpg') or url.endswith('.png') or url.endswith('.pdf'):
 			cursor.execute('''DELETE FROM pages WHERE url = ?''', (url,))
 			conn.commit()
@@ -170,8 +174,8 @@ def remove_image_and_pdf():
 	conn.close()
 
 if __name__ == "__main__":	
-	# prepare all data for asigning topics
-	prepare_topics()
+	# create topic model {model included in git}
+	#prepare_topics()
 
 	# display the topics with most likely words
 	print_topics()
