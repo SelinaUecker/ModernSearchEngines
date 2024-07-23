@@ -22,7 +22,7 @@ from heapq import heapify, heappop, heappush
 
 # Load a pre-trained model for fill-mask
 fill_mask = pipeline("fill-mask", model="bert-base-uncased")
-tuebingen_terms = ["tuebingen", "tuebing", "hohentuebingen", "waldhaeus", "oesterberg", "derendingen", "derending", "lustnau", "lustnauer", "pfrondorf"]
+tuebingen_terms = ["tuebingen", "tuebing", "hohentuebingen", "waldhaeus", "oesterberg", "derendingen", "derending", "lustnau", "lustnauer", "pfrondorf", "wilhelmstr", "wilhelmstrass", "72070", "72072", "72074",  "72076"]
 
 def get_relevant_lemmas(tokenized_query, db_name='index_with_position.db'):
     print("Collecting relevant index...")
@@ -78,19 +78,20 @@ def get_synonyms_with_bert(word):
         f"The word [MASK] means the same as the word {word}.",
         f"Tourists that look for {word} should search for the word [MASK] in their search engine.",
         f"People, that look for {word} should search for the word [MASK] in their search engine.",
-        f"Tourists that are visiting a historical university town, that look for {word} should search for the word [MASK] in their search engine.",
+        f"Tourists that are visiting a university town, that look for {word} should search for the word [MASK] in their search engine.",
         f"People that look for {word} should search for the word [MASK] in their search engine.",
         f"In Tübingen, a [MASK] is a place where people can find {word}.",
-        f"For tourists that are in a historical university town that has a castle and is next a river, a [MASK] is a place where people can find {word}.",
-        f"For people living in a historical university town, a [MASK] is a place where people can find {word}.",
+        f"For tourists that are in a university town that has a castle and is next a river, a [MASK] is a place where people can find {word}.",
+        f"Most poeple think that [MASK] is a place where people can find {word}.",
         f"In a conversation about {word} the word [MASK] could come up.",
+        f"The word [MASK] can often be found in a guide about {word}.",
         f"The word [MASK] is a type of {word}.",
         f"{word} is or are a type of [MASK]."
     ]
     # Synonyms that are filtered out.
-    filtered_synonyms = {"word", "words", "fuck", "hotel", "bad", "god", "love"}
+    filtered_synonyms = {"word", "words", "fuck", "bad", "god", "love"}
     # Only the first 2 prompts are used for these words
-    partially_filtered_words = {"expensive", "inexpensive", "cheap", "luxurious", "luxury", "rare", "unique", "special"}
+    partially_filtered_words = {"expensive", "inexpensive", "cheap", "rare", "unique", "special"}
     # Find synonyms
     synonyms = dict()
     for i, sentence in enumerate(context_sentences):
@@ -151,7 +152,7 @@ def query_processing(query):
     original_len = len(words)
     words += tuebingen_terms
     extended_query = set(words)
-    num_of_synonyms_per_query_term = max(0, 8 - original_len)
+    num_of_synonyms_per_query_term = max(0, 9 - original_len)
     filtered_words = {"tübingen", "good", "nice", "okay", "sensible", "popular", "frequented", "recommend", "recommended", "competent", "renowned", "bad", "unpleasant", 
                       "pleasant"}
 
@@ -205,7 +206,7 @@ def calculate_proximity_score(proximity_lists):
     # Normalization on query length
     normalized_span = min_span / len(proximity_lists)
 
-    return 1 / math.log1p(normalized_span) if normalized_span > 0 else 0
+    return 1 / normalized_span if normalized_span > 0 else 0
 
 def normalize_scores(scores):
     min_score = min(scores.values())
@@ -226,7 +227,7 @@ def rank_documents(index, tokenized_query, original_query, db_name='search.db', 
             doc_ids = index[lemma]
             for doc_id, (bm25_score, positions) in doc_ids.items():
                 # Check if doc includes Tuebingen related term
-                if lemma in tuebingen_terms and lemma != "germany" and lemma != "baden" and lemma != "wuerttemberg":
+                if lemma in tuebingen_terms:
                     include_tuebingen.update({doc_id})
                 
                 if lemma in original_query:
@@ -234,20 +235,20 @@ def rank_documents(index, tokenized_query, original_query, db_name='search.db', 
                     doc_scores[doc_id][2].append(positions)
                 
                     if lemma in tuebingen_terms:
-                        doc_scores[doc_id][0] += 1*bm25_score
-                        # Counter for number of matching terms
-                        doc_scores[doc_id][1] += 1
-                    else:
-                        doc_scores[doc_id][0] += 4*bm25_score
-                        doc_scores[doc_id][1] += 2
-                else:
-                    if lemma in tuebingen_terms:
-                        doc_scores[doc_id][0] += 0.2*bm25_score
+                        doc_scores[doc_id][0] += 0.5*bm25_score
                         # Counter for number of matching terms
                         doc_scores[doc_id][1] += 0.2
                     else:
-                        doc_scores[doc_id][0] += 2*bm25_score
-                        doc_scores[doc_id][1] += 2
+                        doc_scores[doc_id][0] += 6*bm25_score
+                        doc_scores[doc_id][1] += 1
+                else:
+                    if lemma in tuebingen_terms:
+                        doc_scores[doc_id][0] += 0.5*bm25_score
+                        # Counter for number of matching terms
+                        doc_scores[doc_id][1] += 0
+                    else:
+                        doc_scores[doc_id][0] += 4*bm25_score
+                        doc_scores[doc_id][1] += 0.5
 
                 
     # Rank documents that are related to Tübingen higher
