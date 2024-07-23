@@ -241,7 +241,7 @@ def start_ui(process_query_cb):
         global background_photo
         new_width = event.width
         new_height = int(new_width * background_image.height / background_image.width)
-        resized_image = background_image.resize((new_width, new_height), Image.ANTIALIAS)
+        resized_image = background_image.resize((new_width, new_height), Image.LANCZOS)
         background_photo = ImageTk.PhotoImage(resized_image)
         background_label.config(image=background_photo)
 
